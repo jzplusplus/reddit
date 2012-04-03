@@ -1,1 +1,3 @@
-static/robots.txt
+#Don't want any robots in here please :)
+User-agent: *
+Disallow: /
