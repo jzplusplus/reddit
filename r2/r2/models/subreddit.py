@@ -86,19 +86,18 @@ class Subreddit(Thing, Printable):
 
     # note: for purposely unrenderable reddits (like promos) set author_id = -1
     @classmethod
-    def _new(cls, name, title, author_id, ip, lang = g.lang, type = 'public',
+    def _new(cls, name, title, author_id, ip, lang = g.lang, type = 'private',
              over_18 = False, **kw):
         with g.make_lock('create_sr_' + name.lower()):
             try:
                 sr = Subreddit._by_name(name)
                 raise SubredditExists
             except NotFound:
-                if "allow_top" not in kw:
-                    kw['allow_top'] = True
+                kw['allow_top'] = False
                 sr = Subreddit(name = name,
                                title = title,
                                lang = lang,
-                               type = type,
+                               type = 'private',
                                over_18 = over_18,
                                author_id = author_id,
                                ip = ip,

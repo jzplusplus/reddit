@@ -101,22 +101,9 @@
   <%utils:line_field title="${_('type')}">
     <div class="delete-field">
       <table>
-      ${utils.radio_type('type', "public", _("public"),
-                         _("anyone can view and submit"),
-                         (not thing.site or thing.site.type=='public'))}
-      ${utils.radio_type('type', "restricted", _("restricted"),
-                         _("anyone can view, but only some are approved to submit links"),
-                         (thing.site and thing.site.type=='restricted'))}
       ${utils.radio_type('type', "private", _("private"),
                          _("only approved members can view and submit"),
                          (thing.site and thing.site.type=='private'))}
-
-      <% is_archived = thing.site and thing.site.type == 'archived' %>
-      %if c.user_is_admin or is_archived:
-        ${utils.radio_type('type', "archived", _("archived"),
-                           _("anyone can view, but submissions are no longer accepted"),
-                           is_archived)}
-      %endif
       </table>
     </div>
   </%utils:line_field>

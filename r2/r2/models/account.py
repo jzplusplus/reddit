@@ -58,7 +58,7 @@ class Account(Thing):
                      pref_newwindow = False,
                      pref_clickgadget = 5,
                      pref_public_votes = False,
-                     pref_hide_from_robots = False,
+                     pref_hide_from_robots = True,
                      pref_research = False,
                      pref_hide_ups = False,
                      pref_hide_downs = False,
@@ -79,9 +79,9 @@ class Account(Thing):
                      pref_collapse_read_messages = False,
                      pref_private_feeds = True,
                      pref_local_js = False,
-                     pref_show_adbox = True,
-                     pref_show_sponsors = True, # sponsored links
-                     pref_show_sponsorships = True,
+                     pref_show_adbox = False,
+                     pref_show_sponsors = False, # sponsored links
+                     pref_show_sponsorships = False,
                      pref_highlight_new_comments = True,
                      mobile_compress = False,
                      mobile_thumbnail = True,
