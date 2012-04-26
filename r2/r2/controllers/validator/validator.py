@@ -237,14 +237,17 @@ def validatedForm(self, self_method, responder, simple_vals, param_vals,
     # clear out the status line as a courtesy
     form.set_html(".status", "")
 
-    # auto-refresh the captcha if there are errors.
-    if (c.errors.errors and
-        any(isinstance(v, VCaptcha) for v in simple_vals)):
-        form.has_errors('captcha', errors.BAD_CAPTCHA)
-        form.new_captcha()
-    
     # do the actual work
     val = self_method(self, form, responder, *a, **kw)
+
+    # add data to the output on some errors
+    for validator in simple_vals:
+        if (isinstance(validator, VCaptcha) and
+            form.has_errors('captcha', errors.BAD_CAPTCHA)):
+            form.new_captcha()
+        elif (isinstance(validator, VRatelimit) and
+              form.has_errors('ratelimit', errors.RATELIMIT)):
+            form.ratelimit(validator.seconds)
 
     if val:
         return val
@@ -847,6 +850,10 @@ class VSubmitSR(Validator):
             self.set_error(errors.SUBREDDIT_REQUIRED)
             return None
 
+        if not chksrname(sr_name):
+            self.set_error(errors.SUBREDDIT_NOEXIST)
+            return None
+
         try:
             sr = Subreddit._by_name(str(sr_name).strip())
         except (NotFound, AttributeError, UnicodeEncodeError):
@@ -983,6 +990,9 @@ class VUrl(VRequired):
     def run(self, url, sr = None, resubmit=False):
         if sr is None and not isinstance(c.site, FakeSubreddit):
             sr = c.site
+        elif not chksrname(sr):
+            self.set_error(errors.SUBREDDIT_NOEXIST)
+            sr = None
         elif sr:
             try:
                 sr = Subreddit._by_name(str(sr))
@@ -1022,45 +1032,27 @@ class VUrl(VRequired):
             pass
         return params
 
-class VOptionalExistingUname(VRequired):
-    def __init__(self, item, allow_deleted=False, prefer_existing=False,
-                 *a, **kw):
-        self.allow_deleted = allow_deleted
-        self.prefer_existing = prefer_existing
+class VExistingUname(VRequired):
+    def __init__(self, item, *a, **kw):
         VRequired.__init__(self, item, errors.NO_USER, *a, **kw)
 
     def run(self, name):
-        if self.prefer_existing:
-            result = self._lookup(name, False)
-            if not result and self.allow_deleted:
-                result = self._lookup(name, True)
-        else:
-            result = self._lookup(name, self.allow_deleted)
-        return result or self.error(errors.USER_DOESNT_EXIST)
-
-    def _lookup(self, name, allow_deleted):
         if name and name.startswith('~') and c.user_is_admin:
             try:
                 user_id = int(name[1:])
                 return Account._byID(user_id, True)
             except (NotFound, ValueError):
-                return None
+                self.error(errors.USER_DOESNT_EXIST)
 
         # make sure the name satisfies our user name regexp before
         # bothering to look it up.
         name = chkuser(name)
         if name:
             try:
-                return Account._by_name(name, allow_deleted=allow_deleted)
+                return Account._by_name(name)
             except NotFound:
-                return None
-
-class VExistingUname(VOptionalExistingUname):
-    def run(self, name):
-        user = VOptionalExistingUname.run(self, name)
-        if not user:
-            self.error()
-        return user
+                self.error(errors.USER_DOESNT_EXIST)
+        self.error()
 
     def param_docs(self):
         return {
@@ -1243,6 +1235,7 @@ class VRatelimit(Validator):
         self.rate_ip = rate_ip
         self.prefix = prefix
         self.error = error
+        self.seconds = None
         Validator.__init__(self, *a, **kw)
 
     def run (self):
@@ -1270,6 +1263,11 @@ class VRatelimit(Validator):
             # when errors have associated field parameters, we'll need
             # to add that here
             if self.error == errors.RATELIMIT:
+                from datetime import datetime
+                delta = expire_time - datetime.now(g.tz)
+                self.seconds = delta.total_seconds()
+                if self.seconds < 3:  # Don't ratelimit within three seconds
+                    return
                 self.set_error(errors.RATELIMIT, {'time': time},
                                field = 'ratelimit')
             else:
@@ -1655,6 +1653,36 @@ class VTarget(Validator):
         if name and self.target_re.match(name):
             return name
 
+class VFlairAccount(VRequired):
+    def __init__(self, item, *a, **kw):
+        VRequired.__init__(self, item, errors.BAD_FLAIR_TARGET, *a, **kw)
+
+    def _lookup(self, name, allow_deleted):
+        try:
+            return Account._by_name(name, allow_deleted=allow_deleted)
+        except NotFound:
+            return None
+
+    def run(self, name):
+        if not name:
+            return self.error()
+        return (
+            self._lookup(name, False)
+            or self._lookup(name, True)
+            or self.error())
+
+class VFlairLink(VRequired):
+    def __init__(self, item, *a, **kw):
+        VRequired.__init__(self, item, errors.BAD_FLAIR_TARGET, *a, **kw)
+
+    def run(self, name):
+        if not name:
+            return self.error()
+        try:
+            return Link._by_fullname(name, data=True)
+        except NotFound:
+            return self.error()
+
 class VFlairCss(VCssName):
     def __init__(self, param, max_css_classes=10, **kw):
         self.max_css_classes = max_css_classes
@@ -1675,7 +1703,6 @@ class VFlairCss(VCssName):
                 return ''
 
         return css
-
 
 class VFlairText(VLength):
     def __init__(self, param, max_length=64, **kw):

@@ -322,6 +322,10 @@ class HotController(FixListing, ListingController):
                                                limit=srlimit,
                                                over18=over18)
             return normalized_hot(sr_ids)
+
+        elif isinstance(c.site, MultiReddit):
+            return normalized_hot(c.site.kept_sr_ids, obey_age_limit=False)
+
         #if not using the query_cache we still want cached front pages
         elif (not g.use_query_cache
               and not isinstance(c.site, FakeSubreddit)
@@ -904,11 +908,20 @@ class MyredditsController(ListingController):
 
         return stack
 
+    def build_listing(self, after=None, **kwargs):
+        if after and isinstance(after, Subreddit):
+            after = SRMember._fast_query(after, c.user, self.where,
+                                         data=False).values()[0]
+        if after and not isinstance(after, SRMember):
+            abort(400, 'gimme a srmember')
+
+        return ListingController.build_listing(self, after=after, **kwargs)
+
     @validate(VUser())
     @listing_api_doc(section=api_section.subreddits,
                      uri='/reddits/mine/{where}',
                      uri_variants=['/reddits/mine/subscriber', '/reddits/mine/contributor', '/reddits/mine/moderator'])
-    def GET_listing(self, where = 'inbox', **env):
+    def GET_listing(self, where='subscriber', **env):
         self.where = where
         return ListingController.GET_listing(self, **env)
 

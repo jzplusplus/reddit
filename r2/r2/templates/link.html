@@ -78,11 +78,23 @@
   </ul>
  </%def>
 
+<%def name="flair()">
+  %if c.user.pref_show_link_flair and thing.flair_text:
+    <span class="linkflairlabel">${thing.flair_text}</span>
+  %endif
+</%def>
+
 <%def name="entry()">
   <p class="title">
+    %if c.site.link_flair_position == 'left':
+      <%call expr="flair()" />
+    %endif
     <%call expr="make_link('title', 'title')">
       ${thing.title}
     </%call>
+    %if c.site.link_flair_position == 'right':
+      <%call expr="flair()" />
+    %endif
     %if getattr(thing, "approval_checkmark", None):
         <img class="approval-checkmark" title="${thing.approval_checkmark}"
              src="${static('green-check.png')}"
@@ -154,6 +166,10 @@
 
 <%def name="thing_css_class(what)" buffered="True">
 ${parent.thing_css_class(what)} ${"over18" if thing.over_18 else ""}
+%if c.user.pref_show_link_flair and (thing.flair_text or thing.flair_css_class):
+  <% css = thing.flair_css_class or '' %>
+  linkflair ${' '.join('linkflair-' + c for c in css.split())}
+%endif
 </%def>
 
 <%def name="thing_data_attributes(what)" buffered="True">

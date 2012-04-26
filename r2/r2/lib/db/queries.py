@@ -18,6 +18,7 @@ import cPickle as pickle
 from datetime import datetime
 import itertools
 import collections
+from copy import deepcopy
 
 from pylons import g
 query_cache = g.permacache
@@ -336,7 +337,9 @@ def get_spam_comments(sr_id):
 def get_spam(sr):
     if isinstance(sr, ModContribSR):
         srs = Subreddit._byID(sr.sr_ids, return_dict=False)
-        results = [ get_spam_links(sr) for sr in srs ]
+        results = []
+        results.extend(get_spam_links(sr) for sr in srs)
+        results.extend(get_spam_comments(sr) for sr in srs)
         return merge_results(*results)
     else:
         return merge_results(get_spam_links(sr),
@@ -936,7 +939,6 @@ def unban(things):
             add_queries([get_spam_links(sr)], delete_items = links)
             # put it back in the listings
             results = [get_links(sr, 'hot', 'all'),
-                       get_links(sr, 'new', 'all'),
                        get_links(sr, 'top', 'all'),
                        get_links(sr, 'controversial', 'all'),
                        ]
@@ -944,7 +946,21 @@ def unban(things):
             # the time-filtered listings will have to wait for the
             # next mr_top run
 
-            add_queries(results, insert_items = links)
+            add_queries(results, insert_items=links)
+
+            # Check if link is being unbanned and should be put in 'new' with
+            # current time
+            new_links = []
+            for l in links:
+                ban_info = l.ban_info
+                if ban_info.get('reset_used', True) == False and \
+                    ban_info.get('auto', False):
+                    l_copy = deepcopy(l)
+                    l_copy._date = ban_info['unbanned_at']
+                    new_links.append(l_copy)
+                else:
+                    new_links.append(l)
+            add_queries([get_links(sr, 'new', 'all')], insert_items=new_links)
 
         if comments:
             add_queries([get_spam_comments(sr)], delete_items = comments)
@@ -1127,6 +1143,10 @@ def queue_vote(user, thing, dir, ip, organic = False,
                 qname = vote_link_q
             elif isinstance(thing, Comment):
                 qname = vote_comment_q
+            else:
+                log.warning("%s tried to vote on %r. that's not a link or comment!",
+                            user, thing)
+                return
 
             amqp.add_item(qname,
                           pickle.dumps((user._id, thing._fullname,

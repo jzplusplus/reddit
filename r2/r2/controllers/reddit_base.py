@@ -19,6 +19,7 @@
 # All portions of the code written by CondeNet are Copyright (c) 2006-2010
 # CondeNet, Inc. All Rights Reserved.
 ################################################################################
+from mako.filters import url_escape
 import r2.lib.helpers as h
 from pylons import c, g, request
 from pylons.controllers.util import abort, redirect_to
@@ -30,7 +31,7 @@ from r2.lib.utils import http_utils, is_subdomain, UniqueIterator, ip_and_slash1
 from r2.lib.cache import LocalCache, make_key, MemcachedError
 import random as rand
 from r2.models.account import valid_cookie, FakeAccount, valid_feed, valid_admin_cookie
-from r2.models.subreddit import Subreddit
+from r2.models.subreddit import Subreddit, Frontpage
 from r2.models import *
 from errors import ErrorSet
 from validator import *
@@ -122,6 +123,9 @@ class UnloggedUser(FakeAccount):
 
     def _unsubscribe(self, sr):
         pass
+
+    def valid_hash(self, hash):
+        return False
 
     def _commit(self):
         if self._dirty:
@@ -249,13 +253,12 @@ def set_subreddit():
 
     can_stale = request.method.upper() in ('GET','HEAD')
 
-    default_sr = DefaultSR()
-    c.site = default_sr
+    c.site = Frontpage
     if not sr_name:
         #check for cnames
         sub_domain = request.environ.get('sub_domain')
         if sub_domain and not sub_domain.endswith(g.media_domain):
-            c.site = Subreddit._by_domain(sub_domain) or default_sr
+            c.site = Subreddit._by_domain(sub_domain) or Frontpage
     elif sr_name == 'r':
         #reddits
         c.site = Sub
@@ -855,13 +858,32 @@ class RedditController(MinimalController):
             redirect_to("/" + c.site.path.strip('/') + request.path)
         
         if not request.path.startswith("/api/login/"):
-            # check that the site is available:
+            # is the subreddit banned?
             if c.site.spammy() and not c.user_is_admin and not c.error_page:
-                abort(404, "not found")
+                ban_info = getattr(c.site, "ban_info", {})
+                if "message" in ban_info:
+                    message = ban_info['message']
+                else:
+                    sitelink = url_escape(add_sr("/"))
+                    subject = ("/r/%s has been incorrectly banned" %
+                                   c.site.name)
+                    link = ("/r/redditrequest/submit?url=%s&title=%s" %
+                                (sitelink, subject))
+                    message = strings.banned_subreddit_message % dict(
+                                                                    link=link)
+                errpage = pages.RedditError(strings.banned_subreddit_title,
+                                            message,
+                                            image="subreddit-banned.png")
+                request.environ['usable_error_content'] = errpage.render()
+                self.abort404()
 
             # check if the user has access to this subreddit
             if not c.site.can_view(c.user) and not c.error_page:
-                abort(403, "forbidden")
+                errpage = pages.RedditError(strings.private_subreddit_title,
+                                            strings.private_subreddit_message,
+                                            image="subreddit-private.png")
+                request.environ['usable_error_content'] = errpage.render()
+                self.abort403()
 
             #check over 18
             if (c.site.over_18 and not c.over18 and
@@ -915,11 +937,9 @@ class RedditController(MinimalController):
         elif isinstance(exception, (IndextankException, socket.error)):
             g.log.error("IndexTank Error: %s" % repr(exception))
 
-        sf = pages.SearchFail()
+        errpage = pages.RedditError(_("search failed"),
+                                    strings.search_failed)
 
-        us = filters.unsafe(sf.render())
-
-        errpage = pages.RedditError(_('search failed'), us)
         request.environ['usable_error_content'] = errpage.render()
         request.environ['retry_after'] = 60
         abort(503)

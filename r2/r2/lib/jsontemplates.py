@@ -275,6 +275,10 @@ class LinkJsonTemplate(ThingJsonTemplate):
                                                     "author_flair_text",
                                                 author_flair_css_class =
                                                     "author_flair_css_class",
+                                                link_flair_text =
+                                                    "flair_text",
+                                                link_flair_css_class =
+                                                    "flair_css_class",
                                                 thumbnail    = "thumbnail",
                                                 media        = "media_object",
                                                 media_embed  = "media_embed",
@@ -560,3 +564,49 @@ class FlairListJsonTemplate(JsonTemplate):
 class FlairCsvJsonTemplate(JsonTemplate):
     def render(self, thing, *a, **kw):
         return ObjectTemplate([l.__dict__ for l in thing.results_by_line])
+
+class StylesheetTemplate(ThingJsonTemplate):
+    _data_attrs_ = dict(subreddit_id = '_fullname',
+                        stylesheet = 'stylesheet_contents',
+                        images = '_images')
+
+    def kind(self, wrapped):
+        return 'stylesheet'
+
+    def images(self):
+        images = []
+        for name, url in c.site.get_images():
+            images.append({'name': name,
+                           'link': 'url(%%%%%s%%%%)' % name,
+                           'url': url})
+        return images
+
+    def thing_attr(self, thing, attr):
+        if attr == '_images':
+            return self.images()
+        elif attr == '_fullname':
+            return c.site._fullname
+        return ThingJsonTemplate.thing_attr(self, thing, attr)
+
+class SubredditSettingsTemplate(ThingJsonTemplate):
+    _data_attrs_ = dict(subreddit_id = 'site._fullname',
+                        title = 'site.title',
+                        description = 'site.description',
+                        language = 'site.lang',
+                        subreddit_type = 'site.type',
+                        content_options = 'site.link_type',
+                        over_18 = 'site.over_18',
+                        default_set = 'site.allow_top',
+                        show_media = 'site.show_media',
+                        domain = 'site.domain',
+                        domain_css = 'site.css_on_cname',
+                        domain_sidebar = 'site.show_cname_sidebar',
+                        header_hover_text = 'site.header_title')
+
+    def kind(self, wrapped):
+        return 'subreddit_settings'
+
+    def thing_attr(self, thing, attr):
+        if attr.startswith('site.') and thing.site:
+            return getattr(thing.site, attr[5:])
+        return ThingJsonTemplate.thing_attr(self, thing, attr)

@@ -248,7 +248,11 @@ ul.flat-vert {text-align: left;}
     background-image: url(../modmailgray.png);  /* SPRITE */
 }
 .user {color: gray;}
-
+.user .userkarma {
+    cursor: help;
+    font-weight: bold;
+    border-bottom: 1px dotted gray;	
+}
 
 .pagename {
     font-weight: bold;
@@ -664,7 +668,7 @@ ul.flat-vert {text-align: left;}
 
 a.author { margin-right: 0.5em; }
 
-.flair {
+.flair, .linkflairlabel {
     display: inline-block;
     margin-right: .5em;
     padding: 0 2px;
@@ -680,7 +684,16 @@ a.author { margin-right: 0.5em; }
     font-size: xx-small;
 }
 
+.linkflairlabel {
+    font-size: x-small;
+    max-width: 10em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .link .flair {
+    font-size: x-small;
     margin-top: -1px;
 }
 
@@ -765,14 +778,27 @@ a.author { margin-right: 0.5em; }
     text-decoration: none !important;
 }
 
-.flairselector li { border: 1px solid white; cursor: pointer; }
+.flairselector li {
+    border: 1px solid white;
+    cursor: pointer;
+    display: block !important;
+    padding-left: 4px;
+}
+
+.flairselector li a {
+    color: #369 !important;
+    font-weight: normal !important;
+}
+
 .flairselector li:hover { background-color: #bbb;  border: 1px solid #bbb; }
 .flairselector li a:hover { text-decoration: none; }
 .flairselector li.selected { border: dashed 1px black; }
+.flairselector .title { font-size: x-small !important; }
 
 .flairselector form {
     border-top: solid 1px gray;
     clear: both;
+    display: block;
     padding-top: 4px;
     text-align: center;
 }
@@ -788,6 +814,8 @@ a.author { margin-right: 0.5em; }
 .flairselector .customizer input { display: none; }
 .flairselector .customizer button { display: inline !important; }
 
+.flairselector .flairremove { display: none; }
+
 .media-button .option { color: red; }
 .media-button .option.active {
     background: transparent none no-repeat scroll right center;
@@ -798,7 +826,13 @@ a.author { margin-right: 0.5em; }
 
 .embededmedia { margin-top: 5px; margin-left: 60px; }
 
-.thing .title { color: blue; padding: 0px; overflow: hidden; }
+.thing .title {
+    color: blue;
+    margin-right: .4em;
+    padding: 0px;
+    overflow: hidden;
+}
+
 .thing .title:visited { color: #551a8b }
 .thing .title.click { color: #551a8b } 
 
@@ -2321,6 +2355,9 @@ label + #moresearchinfo {
     display: block;
     font-size: x-small; 
     line-height: 17px;
+}
+.button .blog3 .snoo {
+    margin-top: -1px;
 }
 
 
@@ -5327,4 +5364,12 @@ tr.gold-accent + tr > td {
 .api-help .parameters .name {
     font-family: 'Courier New', monospace;
     width: 50%;
+}
+
+#classy-error {
+    text-align: center;
+}
+
+#classy-error .md {
+    display: inline-block;
 }

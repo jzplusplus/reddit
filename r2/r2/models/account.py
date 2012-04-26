@@ -74,6 +74,7 @@ class Account(Thing):
                      pref_label_nsfw = True,
                      pref_show_stylesheets = True,
                      pref_show_flair = True,
+                     pref_show_link_flair = True,
                      pref_mark_messages_read = True,
                      pref_threaded_messages = True,
                      pref_collapse_read_messages = False,
@@ -105,6 +106,19 @@ class Account(Thing):
                      gold_creddits = 0,
                      gold_creddit_escrow = 0,
                      )
+
+    def has_interacted_with(self, sr):
+        if not sr:
+            return False
+
+        for type in ('link', 'comment'):
+            if hasattr(self, "%s_%s_karma" % (sr.name, type)):
+                return True
+
+        if sr.is_subscriber(self):
+            return True
+
+        return False
 
     def karma(self, kind, sr = None):
         suffix = '_' + kind + '_karma'

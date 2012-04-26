@@ -325,6 +325,9 @@ function linkstatus(form) {
 function subscribe(reddit_name) {
     return function() { 
         if (reddit.logged) {
+            if (reddit.cur_site == reddit_name) {
+                $('body').addClass('subscriber');
+            }
             $.things(reddit_name).find(".entry").addClass("likes");
             $.request("subscribe", {sr: reddit_name, action: "sub"});
         }
@@ -334,6 +337,9 @@ function subscribe(reddit_name) {
 function unsubscribe(reddit_name) {
     return function() { 
         if (reddit.logged) {
+            if (reddit.cur_site == reddit_name) {
+                $('body').removeClass('subscriber');
+            }
             $.things(reddit_name).find(".entry").removeClass("likes");
             $.request("subscribe", {sr: reddit_name, action: "unsub"});
         }
@@ -1114,7 +1120,7 @@ function fetch_parent(elem, parent_permalink, parent_id) {
                     });
                 if(parent) {
                     /* make a parent div for the contents of the fetch */
-                    thing.find(".noncollapsed .md")
+                    thing.find(".noncollapsed .md").first() 
                         .before('<div class="parent rounded">' +
                                 $.unsafe(parent) +
                                 '</div>'); 

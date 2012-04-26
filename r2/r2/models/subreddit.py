@@ -75,7 +75,9 @@ class Subreddit(Thing, Printable):
                      link_type = 'any', # one of ('link', 'self', 'any')
                      flair_enabled = True,
                      flair_position = 'right', # one of ('left', 'right')
+                     link_flair_position = '', # one of ('', 'left', 'right')
                      flair_self_assign_enabled = False,
+                     link_flair_self_assign_enabled = False,
                      )
     _essentials = ('type', 'name', 'lang')
     _data_int_props = Thing._data_int_props + ('mod_actions', 'reported')
@@ -651,6 +653,7 @@ class FakeSubreddit(Subreddit):
     def __init__(self):
         Subreddit.__init__(self)
         self.title = ''
+        self.link_flair_position = 'right'
 
     def is_moderator(self, user):
         return c.user_is_loggedin and c.user_is_admin
@@ -844,6 +847,10 @@ class DefaultSR(_DefaultSR):
         return "t5_6"
 
     @property
+    def type(self):
+        return self._base.type if self._base else "public"
+
+    @property
     def header(self):
         return (self._base and self._base.header) or _DefaultSR.header
 
@@ -932,6 +939,9 @@ class ModContribSR(_DefaultSR):
         else:
             return []
 
+    def rising_srs(self):
+        return self.sr_ids
+
     def get_links(self, sort, time):
         return self.get_links_sr_ids(self.sr_ids, sort, time)
 
@@ -982,6 +992,7 @@ class DomainSR(FakeSubreddit):
         # switched over to use the non-_old variety.
         return queries.get_domain_links(self.domain, sort, time)
 
+Frontpage = DefaultSR()
 Sub = SubSR()
 Friends = FriendsSR()
 Mod = ModSR()

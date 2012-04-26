@@ -20,4 +20,31 @@
 ## CondeNet, Inc. All Rights Reserved.
 ################################################################################
 
-${thing.wrapped_user}
+<%namespace file="link.html" import="entry" />
+
+<%
+from r2.models import USER_FLAIR, LINK_FLAIR
+%>
+
+<%def name="flair()">
+  %if thing.flair_template.text or thing.flair_template.css_class:
+    <span class="linkflairlabel">${thing.flair_template.text}</span>
+  %endif
+</%def>
+
+
+%if thing.flair_type == USER_FLAIR:
+  ${thing.wrapped_user}
+%elif thing.flair_type == LINK_FLAIR:
+  <div class="thing linkflair ${' '.join('linkflair-' + c for c in thing.flair_template.css_class.split())}">
+    <p class="title">
+      %if c.site.link_flair_position != 'right':
+        <%call expr="flair()" />
+      %endif
+      <a class="title loggedin" href="javascript://void(0)">Link sample</a>
+      %if c.site.link_flair_position == 'right':
+        <%call expr="flair()" />
+      %endif
+    </p>
+  </div>
+%endif

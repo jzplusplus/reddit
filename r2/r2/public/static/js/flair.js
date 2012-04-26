@@ -1,7 +1,7 @@
 $(function() {
     function showSaveButton(field) {
         $(field).parent().parent().addClass("edited");
-        $(field).parent().parent().find(".status").html("");
+        $(field).parent().parent().find(".status").empty();
     }
 
     function onEdit() {
@@ -54,12 +54,23 @@ $(function() {
             });
         } else {
             customizer.removeClass("texteditable");
-            input.attr("disabled", "disabled");
-            input.css("display", "none");
+            input.attr("disabled", "disabled").hide();
         }
-        $(".flairselection").html($(this).first().children().clone());
-        $(".flairselector button").removeAttr("disabled");
+        var remover = $(".flairselector .flairremove").detach();
+        $(".flairselection").html($(this).first().children().clone())
+            .append(remover);
+        $(".flairselector .flairremove").css("display", "inline-block");
         return false;
+    }
+
+    function removeFlairInSelector(e) {
+        var form = $(this).parent().parent();
+        $(form).children('input[name="flair_template_id"]').val("");
+        $(form).children(".customizer").hide();
+        var remover = $(".flairselector .flairremove").detach();
+        $(remover).hide();
+        $(".flairselector li").removeClass("selected");
+        $(".flairselection").empty().append(remover);
     }
 
     function postFlairSelection(e) {
@@ -142,14 +153,14 @@ $(function() {
                 .find(".customizer input")
                     .attr("disabled", "disabled")
                 .end()
-                .find("button")
-                    .attr("disabled", "disabled")
-                .end()
                 .find("li.selected")
                     .each(selectFlairInSelector)
                 .end()
                 .find("li:not(.error)")
                     .click(selectFlairInSelector)
+                .end()
+                .find(".flairremove")
+                    .click(removeFlairInSelector)
                 .end();
         }
 
@@ -165,9 +176,12 @@ $(function() {
                  ($(button).position().left + $(button).width() - 18) + "px")
             .css("top", $(button).position().top + "px");
 
-        var name = $(selector).siblings("form").find("input").val();
-        $.request("flairselector", {"name": name}, handleResponse, true,
-                  "html");
+        var params = {};
+        $(selector).siblings("form").find("input").each(
+            function(idx, inp) {
+                params[inp.name] = inp.value;
+            });
+        $.request("flairselector", params, handleResponse, true, "html");
         return false;
     }
 
@@ -194,6 +208,7 @@ $(function() {
     $(".flairtoggle input").change(function() { $(this).parent().submit(); });
 
     $(".tagline").delegate(".flairselectbtn", "click", openFlairSelector);
+    $(".thing").delegate(".flairselectbtn", "click", openFlairSelector);
 
     $(".flairselector .dropdown").click(toggleFlairSelector);
 });

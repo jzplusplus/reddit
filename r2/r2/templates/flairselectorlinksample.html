@@ -1,4 +1,4 @@
-## The contents of this file are subject to the Coammon Public Attribution
+## The contents of this file are subject to the Common Public Attribution
 ## License Version 1.0. (the "License"); you may not use this file except in
 ## compliance with the License. You may obtain a copy of the License at
 ## http://code.reddit.com/LICENSE. The License is based on the Mozilla Public
@@ -20,4 +20,21 @@
 ## CondeNet, Inc. All Rights Reserved.
 ################################################################################
 
-<%inherit file="searchfail.html" />
+<%def name="flair()">
+  <span class="linkflairlabel">${thing.flair_text}</span>
+</%def>
+
+<div class="linkflair ${' '.join('linkflair-%s' % c for c in thing.flair_css_class.split())}">
+%if thing.flair_position == 'left':
+  ${flair()}
+%endif
+<%
+  title = thing.title
+  if len(title) > 10:
+      title = title[:7] + '...'
+%>
+  <a class="title" href="javascript://void(0)">${title}</a>
+%if thing.flair_position == 'right':
+  ${flair()}
+%endif
+</div>
