@@ -1163,8 +1163,8 @@ def votes_visible(user):
      * if the current user is an administrator
     """
     return ((c.user_is_loggedin and c.user.name == user.name) or
-            user.pref_public_votes or
-            c.user_is_admin)
+            user.pref_public_votes or False)
+            #c.user_is_admin)
 
 
 class ProfilePage(Reddit):
