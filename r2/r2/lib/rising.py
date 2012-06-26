@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from pylons import g, c
 from r2.models.link import Link, Subreddit
 from r2.lib import utils
@@ -63,8 +64,8 @@ def set_rising():
 def get_rising(sr):
     #get the sr_ids
     sr_ids = sr.rising_srs()
-    rising = cache.get('rising') or ()
     if sr_ids:
+        rising = cache.get('rising', [])
         return [p[0] for p in filter(lambda pair: pair[1] in sr_ids, rising)]
     else:
-        return [p[0] for p in rising]
+        return []

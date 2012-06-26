@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from base64 import standard_b64decode as b64dec, \
      standard_b64encode as b64enc
 from pylons import request
@@ -26,7 +27,7 @@ from Crypto.Cipher import AES
 from random import choice
 from pylons import g, c
 from urllib import quote_plus, unquote_plus
-import sha
+import hashlib
 import urllib
 
 key_len = 16
@@ -181,8 +182,8 @@ class PromotedLinkInfo(Info):
 
     @classmethod
     def make_hash(cls, ip, fullname):
-        return sha.new("%s%s%s" % (ip, fullname,
-                                   g.tracking_secret)).hexdigest()
+        return hashlib.sha1("%s%s%s" % (ip, fullname,
+                                        g.tracking_secret)).hexdigest()
 
     def tracking_url(self):
         return (self.tracker_url + "?hash=" +
@@ -208,8 +209,8 @@ class AdframeInfo(PromotedLinkInfo):
 
     @classmethod
     def make_hash(cls, ip, fullname):
-        return sha.new("%s%s" % (fullname,
-                                 g.tracking_secret)).hexdigest()
+        return hashlib.sha1("%s%s" % (fullname,
+                                      g.tracking_secret)).hexdigest()
 
 
 

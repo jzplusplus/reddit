@@ -11,14 +11,14 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
 
 from Queue import Queue
 from threading import local, Thread
@@ -42,6 +42,7 @@ amqp_exchange = 'reddit_exchange'
 log = g.log
 amqp_virtual_host = g.amqp_virtual_host
 amqp_logging = g.amqp_logging
+stats = g.stats
 
 #there are two ways of interacting with this module: add_item and
 #handle_items/consume_items. _add_item (the internal function for
@@ -154,16 +155,20 @@ def _add_item(routing_key, body, message_id = None,
     if message_id:
         msg.properties['message_id'] = message_id
 
+    event_name = 'amqp.%s' % routing_key
     try:
         chan.basic_publish(msg,
                            exchange = amqp_exchange,
                            routing_key = routing_key)
     except Exception as e:
+        stats.event_count(event_name, 'enqueue_failed')
         if e.errno == errno.EPIPE:
             connection_manager.get_channel(True)
             add_item(routing_key, body, message_id)
         else:
             raise
+    else:
+        stats.event_count(event_name, 'enqueue')
 
 def add_item(routing_key, body, message_id = None, delivery_mode = DELIVERY_DURABLE):
     if amqp_host and amqp_logging:

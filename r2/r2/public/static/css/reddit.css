@@ -300,6 +300,10 @@ ul.flat-vert {text-align: left;}
     background-color: #c7def7;
 }
 
+.drop-choices a.choice.selected {
+    display: none;
+}
+
 .dropdown.heavydrop .selected{
     background: white none no-repeat scroll center right;
     background-image: url(../droparrow.gif);
@@ -641,6 +645,11 @@ ul.flat-vert {text-align: left;}
     overflow: hidden;
 }
 
+.compressed .midcol {
+    width: 15px;
+    margin-right: 5px;
+}
+
 .entry {
     overflow: hidden; 
     margin-left: 3px;
@@ -665,6 +674,7 @@ ul.flat-vert {text-align: left;}
 .tagline .alum { color: #BE1337; }
 .tagline a.author.admin { font-weight: bold }
 .tagline a:hover { text-decoration: underline }
+.tagline .edited-timestamp{ cursor: default }
 
 a.author { margin-right: 0.5em; }
 
@@ -845,6 +855,29 @@ a.author { margin-right: 0.5em; }
 .ajaxhook { position: absolute; top: -1000px; left: 0px; }
 .nextprev { color: gray; font-size: larger; margin-top: 10px;}
 
+.nextprev a {
+    padding: 1px 4px;
+    background: #eee;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+
+.nextprev a:hover {
+    background: #f0f0f0;
+    border: 1px solid #82A6C9;
+}
+
+.nextprev a:active {
+    background: #e4e4e4;
+}
+
+.nextprev .separator {
+    margin: 0;
+    margin-left: .5em;
+    padding-left: .5em;
+    border-left: 1px solid #ccc;
+}
+
 /* corner help */
 .help a.help {
     color: #808080;
@@ -902,7 +935,7 @@ a.author { margin-right: 0.5em; }
 }
 .organic-listing .link,
 .organic-listing .link.promotedlink {
-    padding: 5px 7em 10px 0;
+    padding: 5px 7em 10px 2px;
     margin-bottom: 0px;  
 }
 
@@ -1221,7 +1254,7 @@ a.star { text-decoration: none; color: #ff8b60 }
 
 /* comments */
 
-.comment { margin-left: 10px; }
+.comment, .content .details { margin-left: 10px; }
 .comment .edit-body { display: none; visibility: hidden; }
 .comment .midcol { margin-left: 0px; }
 .comment .title { font-size: small; margin-top: 10px;}
@@ -1467,7 +1500,7 @@ textarea.gray { color: gray; }
 .subreddit .description {font-size: small; max-width: 60em;}
 .subreddit .key {display: block;}
 .subreddit .title { font-size: medium; margin-right: 5px; }
-.subreddit .midcol { margin-right: 5px; margin-top: 5px; text-align: right; }
+.subreddit .midcol { margin-right: 5px; margin-top: 5px; text-align: right; width: 12em; }
 
 .fancy-toggle-button {
     display: block;
@@ -2249,10 +2282,17 @@ label + #moresearchinfo {
 
 .bottommenu { color: gray; font-size: smaller; clear: both}
 .bottommenu a { color: gray; text-decoration: underline;   }
-.bottommenu.serverinfo { text-align:right; padding:5px; }
-.bottommenu.serverinfo .icon { color:#a0a0a0; font:1.5em serif; padding:0 2px; }
-.bottommenu.serverinfo .content { display:none; }
-.bottommenu.serverinfo:hover .content { display:inline; }
+
+.debuginfo {
+    text-align: right;
+    padding: 5px;
+    color: gray;
+    font-size: smaller;
+    clear: both;
+}
+.debuginfo .icon { color:#a0a0a0; font:1.5em serif; padding:0 2px; }
+.debuginfo .content { display:none; }
+.debuginfo:hover .content { display:inline; }
 
 
 /* Buttons specific */
@@ -4325,11 +4365,31 @@ dd { margin-left: 20px;  }
     color: gray; 
 }
 
-.sidecontentbox h1 {
+.sidecontentbox .title h1 {
+    display: inline;
     text-transform:uppercase;
     margin: 0;
     color: gray;
     font-size: 130%;
+}
+
+.sidecontentbox.collapsible .title {
+    cursor: pointer;
+}
+
+.sidecontentbox .collapse-button {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    line-height: 10px;
+    text-align: center;
+    font-size: 10px;
+    background: #eee;
+    color: #333;
+    border: 1px solid #999;
+    border-radius: 2px;
+    margin: 1px 8px;
+    vertical-align: bottom;
 }
 
 .titlebox form.toggle, .leavemoderator {

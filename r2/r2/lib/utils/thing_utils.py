@@ -1,3 +1,25 @@
+# The contents of this file are subject to the Common Public Attribution
+# License Version 1.0. (the "License"); you may not use this file except in
+# compliance with the License. You may obtain a copy of the License at
+# http://code.reddit.com/LICENSE. The License is based on the Mozilla Public
+# License Version 1.1, but Sections 14 and 15 have been added to cover use of
+# software over a computer network and provide for limited attribution for the
+# Original Developer. In addition, Exhibit A has been modified to be consistent
+# with Exhibit B.
+#
+# Software distributed under the License is distributed on an "AS IS" basis,
+# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
+# the specific language governing rights and limitations under the License.
+#
+# The Original Code is reddit.
+#
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
+#
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from datetime import datetime
 from utils import tup
 import pytz
@@ -28,21 +50,6 @@ def set_last_modified(thing, action):
     key = last_modified_key(thing, action)
     g.permacache.set(key, make_last_modified())
 
-
-def set_last_modified_for_cls(user, cls_type_name):
-    if cls_type_name != "vote_account_link":
-        set_last_modified(user, "cls_" + cls_type_name)
-
-def get_last_modified_for_cls(user, cls_type_name):
-    # vote times are already stored in the permacache and updated by the
-    # query queue
-    if cls_type_name == "vote_account_link":
-        return max(last_modified_date(user, "liked"),
-                   last_modified_date(user, "disliked"))
-    # other types are not -- special key for them
-    elif cls_type_name in ("vote_account_comment", "savehide"):
-        return last_modified_date(user, "cls_" + cls_type_name)
-
 def last_modified_multi(things, action):
     from pylons import g
     cache = g.permacache
@@ -52,24 +59,3 @@ def last_modified_multi(things, action):
 
     last_modified = cache.get_multi(keys.keys())
     return dict((keys[k], v) for k, v in last_modified.iteritems())
-
-
-def set_last_visit(thing):
-    from pylons import g
-    from r2.lib.cache import CL_ONE
-    key = last_modified_key(thing, "visit")
-    g.permacache.set(key, make_last_modified())
-
-def last_visit(thing):
-    from pylons import g
-    res = last_modified_date(thing, "visit", False)
-    if res is None:
-        res = getattr(thing, "last_visit", None)
-        if res:
-            g.permacache.set(last_modified_key(thing, "visit"), res)
-    return res
-
-def last_visit_multi(things):
-    return last_modified_multi(things, "visit")
-
-

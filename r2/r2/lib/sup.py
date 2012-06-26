@@ -11,18 +11,19 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
 
 from datetime import datetime
 from itertools import ifilter
-import time, md5
+import time
+import hashlib
 
 import simplejson
 
@@ -52,7 +53,7 @@ def make_last_time(period):
     return make_cur_time(period) - period
 
 def make_sup_id(user, action):
-    sup_id = md5.new(user.name + action).hexdigest()
+    sup_id = hashlib.md5(user.name + action).hexdigest()
     #cause cool kids only use part of the hash
     return sup_id[:10]
 

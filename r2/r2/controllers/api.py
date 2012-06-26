@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from reddit_base import RedditController, MinimalController, set_user_cookie
 from reddit_base import cross_domain, paginated_listing
 
@@ -39,6 +40,7 @@ from r2.lib.pages import FlairList, FlairCsv, FlairTemplateEditor, \
     FlairSelector
 from r2.lib.utils.trial_utils import indict, end_trial, trial_info
 from r2.lib.pages.things import wrap_links, default_thing_wrapper
+from r2.models.last_modified import LastModified
 
 from r2.lib.menus import CommentSortMenu
 from r2.lib.captcha import get_iden
@@ -59,7 +61,7 @@ from r2.controllers.api_docs import api_doc, api_section
 import csv
 from collections import defaultdict
 from datetime import datetime, timedelta
-from md5 import md5
+import hashlib
 import urllib
 import urllib2
 
@@ -181,12 +183,15 @@ class ApiController(RedditController):
             form.set_html(".status", _("your message has been delivered"))
             form.set_inputs(to = "", subject = "", text = "", captcha="")
 
+            amqp.add_item('new_message', m._fullname)
+
             queries.new_message(m, inbox_rel)
 
     @validatedForm(VUser(),
                    VCaptcha(),
                    VRatelimit(rate_user = True, rate_ip = True,
                               prefix = "rate_submit_"),
+                   VShamedDomain('url'),
                    ip = ValidIP(),
                    sr = VSubmitSR('sr', 'kind'),
                    url = VUrl(['url', 'sr', 'resubmit']),
@@ -250,6 +255,8 @@ class ApiController(RedditController):
             # check for no url, or clear that error field on return
             if form.has_errors("url", errors.NO_URL, errors.BAD_URL):
                 pass
+            elif form.has_errors("url", errors.DOMAIN_BANNED):
+                g.stats.simple_event('spam.shame.link')
             elif form.has_errors("url", errors.ALREADY_SUB):
                 check_domain = False
                 u = url[0].already_submitted_link
@@ -266,13 +273,8 @@ class ApiController(RedditController):
                 g.log.warning("%s is trying to submit url=None (title: %r)"
                               % (request.ip, title))
             elif check_domain:
+
                 banmsg = is_banned_domain(url, request.ip)
-
-# Uncomment if we want to let spammers know we're on to them
-#            if banmsg:
-#                form.set_html(".field-url.BAD_URL", banmsg)
-#                return
-
         else:
             form.has_errors('text', errors.TOO_LONG)
 
@@ -315,6 +317,7 @@ class ApiController(RedditController):
                          c.user, sr, ip, spam=c.user._spam)
 
         if banmsg:
+            g.stats.simple_event('spam.domainban.link_url')
             admintools.spam(l, banner = "domain (%s)" % banmsg)
 
         if kind == 'self':
@@ -438,6 +441,8 @@ class ApiController(RedditController):
             d = c.user._dirties.copy()
             user._commit()
 
+            amqp.add_item('new_account', user._fullname)
+
             c.user = user
             self._login(responder, user, rem)
 
@@ -549,6 +554,17 @@ class ApiController(RedditController):
         if (not c.user_is_admin
             and (type in sr_types and not container.is_moderator(c.user))):
             abort(403,'forbidden')
+        
+        if type in sr_types and not c.user_is_admin:
+            quota_key = "sr%squota-%s" % (str(type), container._id36)
+            g.cache.add(quota_key, 0, time=g.sr_quota_time)
+            subreddit_quota = g.cache.incr(quota_key)
+            quota_limit = getattr(g, "sr_%s_quota" % type)
+            if subreddit_quota > quota_limit and container.use_quotas:
+                form.set_html(".status", errors.SUBREDDIT_RATELIMIT)
+                c.errors.add(errors.SUBREDDIT_RATELIMIT)
+                form.set_error(errors.SUBREDDIT_RATELIMIT, None)
+                return
 
         # if we are (strictly) friending, the container
         # had better be the current user.
@@ -745,6 +761,7 @@ class ApiController(RedditController):
     @noresponse(VUser(),
                 VModhash(),
                 thing = VByNameIfAuthor('id'))
+    @api_doc(api_section.links_and_comments)
     def POST_del(self, thing):
         if not thing: return
         '''for deleting all sorts of things'''
@@ -914,14 +931,17 @@ class ApiController(RedditController):
 
             if (item._date < timeago('3 minutes')
                 or (item._ups + item._downs > 2)):
-                item.editted = True
+                item.editted = c.start_time
 
             item._commit()
 
             changed(item)
 
+            amqp.add_item('usertext_edited', item._fullname)
+
             if kind == 'link':
                 set_last_modified(item, 'comments')
+                LastModified.touch(item._fullname, 'Comments')
 
             wrapper = default_thing_wrapper(expand_children = True)
             jquery(".content").replace_things(item, True, True, wrap = wrapper)
@@ -1185,7 +1205,8 @@ class ApiController(RedditController):
             c.site.stylesheet_contents      = stylesheet_contents_parsed
             c.site.stylesheet_contents_user = stylesheet_contents
 
-            c.site.stylesheet_hash = md5(stylesheet_contents_parsed).hexdigest()
+            hash = hashlib.md5(stylesheet_contents_parsed)
+            c.site.stylesheet_hash = hash.hexdigest()
 
             set_last_modified(c.site,'stylesheet_contents')
 
@@ -1367,6 +1388,7 @@ class ApiController(RedditController):
                    title = VLength("title", max_length = 100),
                    header_title = VLength("header-title", max_length = 500),
                    domain = VCnameDomain("domain"),
+                   public_description = VMarkdown("public_description", max_length = 500),
                    description = VMarkdown("description", max_length = 5120),
                    lang = VLang("lang"),
                    over_18 = VBoolean('over_18'),
@@ -1392,7 +1414,7 @@ class ApiController(RedditController):
                   if k in ('name', 'title', 'domain', 'description', 'over_18',
                            'show_media', 'show_cname_sidebar', 'type', 'link_type', 'lang',
                            "css_on_cname", "header_title", 
-                           'allow_top'))
+                           'allow_top', 'public_description'))
 
         #if a user is banned, return rate-limit errors
         if c.user._spam:
@@ -1418,6 +1440,7 @@ class ApiController(RedditController):
         elif form.has_errors('domain', errors.BAD_CNAME, errors.USED_CNAME):
             form.find('#example_domain').hide()
         elif (form.has_errors(('type', 'link_type'), errors.INVALID_OPTION) or
+              form.has_errors('public_description', errors.TOO_LONG) or
               form.has_errors('description', errors.TOO_LONG)):
             pass
 
@@ -1490,8 +1513,8 @@ class ApiController(RedditController):
         else:
             username = None
         d = dict(username=username, q=q, sort=sort, t=t)
-        hex = md5(repr(d)).hexdigest()
-        key = "indextankfeedback-%s-%s-%s" % (timestamp[:10], request.ip, hex)
+        hex = hashlib.md5(repr(d)).hexdigest()
+        key = "searchfeedback-%s-%s-%s" % (timestamp[:10], request.ip, hex)
         d['timestamp'] = timestamp
         d['approval'] = approval
         g.hardcache.set(key, d, time=86400 * 7)
@@ -1757,7 +1780,9 @@ class ApiController(RedditController):
             g.cache.set(mc_key, 1, time=30)
             count = 1
 
-        if count >= 10:
+        # Anything above 15 hits in 30 seconds violates the
+        # "1 request per 2 seconds" rule of the API
+        if count > 15:
             if user:
                 name = user.name
             else:
@@ -2158,6 +2183,7 @@ class ApiController(RedditController):
             link.flair_text = text
             link.flair_css_class = css_class
             link._commit()
+            changed(link)
             ModAction.create(site, c.user, action='editflair', target=link,
                              details='flair_edit')
         elif flair_type == USER_FLAIR:
@@ -2274,11 +2300,11 @@ class ApiController(RedditController):
             setattr(user, 'flair_%s_css_class' % c.site._id, css_class)
             user._commit()
 
-            ModAction.create(c.site, c.user, action='editflair', target=user,
-                             details='flair_csv')
-
             line_result.status = '%s flair for user %s' % (mode, user.name)
             line_result.ok = True
+
+        ModAction.create(c.site, c.user, action='editflair',
+                         details='flair_csv')
 
         return BoringPage(_("API"), content = results).render()
 
@@ -2522,6 +2548,7 @@ class ApiController(RedditController):
             link.flair_text = text
             link.flair_css_class = css_class
             link._commit()
+            changed(link)
 
             if ((c.site.is_moderator(c.user) or c.user_is_admin)):
                 ModAction.create(c.site, c.user, action='editflair',

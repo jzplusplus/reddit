@@ -11,15 +11,17 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 import inspect
+import pytz
 from datetime import datetime
 from socket import gethostbyaddr
 
@@ -28,8 +30,8 @@ from pylons import g
 from pycassa import ColumnFamily
 from pycassa.cassandra.ttypes import ConsistencyLevel, NotFoundException
 from pycassa.system_manager import SystemManager, UTF8_TYPE, COUNTER_COLUMN_TYPE, TIME_UUID_TYPE
+from pycassa.types import DateType
 from r2.lib.utils import tup, Storage
-from r2.lib.db.sorts import epoch_seconds
 from r2.lib import cache
 from uuid import uuid1, UUID
 from itertools import chain
@@ -62,7 +64,11 @@ CL = Storage(ANY    = ConsistencyLevel.ANY,
 # wire for a given row (this should be increased if we start working
 # with classes with lots of columns, like Account which has lots of
 # karma_ rows, or we should not do that)
-max_column_count = 25000
+max_column_count = 50000
+
+# the pycassa date serializer, for use when we can't set the right metadata
+# to get pycassa to serialize dates for us
+date_serializer = DateType()
 
 class CassandraException(Exception):
     """Base class for Exceptions in tdb_cassandra"""
@@ -434,6 +440,11 @@ class ThingBase(object):
         return cls._read_consistency_level
 
     @classmethod
+    def _get_column_validator(cls, colname):
+        return cls._cf.column_validators.get(colname,
+                                             cls._cf.default_validation_class)
+
+    @classmethod
     def _deserialize_column(cls, attr, val):
         if attr in cls._int_props or (cls._value_type and cls._value_type == 'int'):
             try:
@@ -448,8 +459,7 @@ class ThingBase(object):
         elif attr in cls._pickle_props or (cls._value_type and cls._value_type == 'pickle'):
             return pickle.loads(val)
         elif attr in cls._date_props or attr == cls._timestamp_prop or (cls._value_type and cls._value_type == 'date'):
-            as_float = float(val)
-            return datetime.utcfromtimestamp(as_float).replace(tzinfo = tz)
+            return cls._deserialize_date(val)
         elif attr in cls._bytes_props or (cls._value_type and cls._value_type == 'bytes'):
             return val
 
@@ -470,7 +480,11 @@ class ThingBase(object):
         elif (attr in cls._date_props or attr == cls._timestamp_prop or
               (cls._value_type and cls._value_type == 'date')):
             # the _timestamp_prop is handled in _commit(), not here
-            return cls._serialize_date(val)
+            if cls._get_column_validator(attr) == 'DateType':
+                # pycassa will take it from here
+                return val
+            else:
+                return cls._serialize_date(val)
         elif attr in cls._bytes_props or (cls._value_type and cls._value_type == 'bytes'):
             return val
 
@@ -478,12 +492,19 @@ class ThingBase(object):
 
     @classmethod
     def _serialize_date(cls, date):
-        return str(epoch_seconds(date))
+        return date_serializer.pack(date)
 
     @classmethod
     def _deserialize_date(cls, val):
-        as_float = float(val)
-        return datetime.utcfromtimestamp(as_float).replace(tzinfo = tz)
+        if isinstance(val, datetime):
+            date = val
+        elif len(val) == 8: # cassandra uses 8-byte integer format for this
+            date = date_serializer.unpack(val)
+        else: # it's probably the old-style stringified seconds since epoch
+            as_float = float(val)
+            date = datetime.utcfromtimestamp(as_float)
+
+        return date.replace(tzinfo=pytz.utc)
 
     @classmethod
     def _from_serialized_columns(cls, t_id, columns):
@@ -793,30 +814,57 @@ class Relation(ThingBase):
         pass
 
     @classmethod
-    def _fast_query(cls, thing1_ids, thing2_ids, properties = None, **kw):
+    def _fast_query(cls, thing1s, thing2s, properties = None, **kw):
         """Find all of the relations of this class between all of the
            members of thing1_ids and thing2_ids"""
-        thing1_ids, thing1s_is_single = tup(thing1_ids, True)
-        thing2_ids, thing2s_is_single = tup(thing2_ids, True)
+        thing1s, thing1s_is_single = tup(thing1s, True)
+        thing2s, thing2s_is_single = tup(thing2s, True)
 
-        if not thing1_ids or not thing2_ids:
-            # nothing to permute
+        if not thing1s or not thing2s:
             return {}
 
+        # grab the last time each thing1 modified this relation class so we can
+        # know which relations not to even bother looking up
+        if thing1s:
+            from r2.models.last_modified import LastModified
+            fullnames = [cls._thing1_cls._fullname_from_id36(thing1._id36)
+                         for thing1 in thing1s]
+            timestamps = LastModified.get_multi(fullnames,
+                                                cls._cf.column_family)
+
+        # build up a list of ids to look up, throwing out the ones that the
+        # timestamp fetched above indicates are pointless
+        ids = set()
+        thing1_ids, thing2_ids = {}, {}
+        for thing1 in thing1s:
+            last_modification = timestamps.get(thing1._fullname)
+
+            if not last_modification:
+                continue
+
+            for thing2 in thing2s:
+                key = cls._rowkey(thing1._id36, thing2._id36)
+
+                if key in ids:
+                    continue
+
+                if thing2._date > last_modification:
+                    continue
+
+                ids.add(key)
+                thing2_ids[thing2._id36] = thing2
+            thing1_ids[thing1._id36] = thing1
+
+        # all relations must load these properties, even if unrequested
         if properties is not None:
             properties = set(properties)
 
-            # all relations must load these properties, even if
-            # unrequested
             properties.add('thing1_id')
             properties.add('thing2_id')
 
-        # permute all of the pairs
-        ids = set(cls._rowkey(x, y)
-                  for x in thing1_ids
-                  for y in thing2_ids)
-
-        rels = cls._byID(ids, properties = properties).values()
+        rels = {}
+        if ids:
+            rels = cls._byID(ids, properties=properties).values()
 
         if thing1s_is_single and thing2s_is_single:
             if rels:
@@ -824,10 +872,10 @@ class Relation(ThingBase):
                 return rels[0]
             else:
                 raise NotFound("<%s %r>" % (cls.__name__,
-                                            cls._rowkey(thing1_ids[0],
-                                                        thing2_ids[0])))
+                                            cls._rowkey(thing1s[0]._id36,
+                                                        thing2s[0]._id36)))
 
-        return dict(((rel.thing1_id, rel.thing2_id), rel)
+        return dict(((thing1_ids[rel.thing1_id], thing2_ids[rel.thing2_id]), rel)
                     for rel in rels)
 
     @classmethod
@@ -857,7 +905,13 @@ class Relation(ThingBase):
     def _commit(self, *a, **kw):
         assert self._id == self._rowkey(self.thing1_id, self.thing2_id)
 
-        return ThingBase._commit(self, *a, **kw)
+        retval = ThingBase._commit(self, *a, **kw)
+
+        from r2.models.last_modified import LastModified
+        fullname = self._thing1_cls._fullname_from_id36(self.thing1_id)
+        LastModified.touch(fullname, self._cf.column_family)
+
+        return retval
 
     @classmethod
     def _rel(cls, thing1_cls, thing2_cls):
@@ -1217,6 +1271,14 @@ class View(ThingBase):
         """Retrieve the entire contents of the view"""
         # TODO: at present this only grabs max_column_count columns
         return self._t
+
+    @classmethod
+    def get_time_sorted_columns(cls, rowkey, limit=None):
+        q = cls._cf.xget(rowkey, include_timestamp=True)
+        r = sorted(q, key=lambda i: i[1][1]) # (col_name, (col_val, timestamp))
+        if limit:
+            r = r[:limit]
+        return OrderedDict([(i[0], i[1][0]) for i in r])
 
     @classmethod
     @will_write

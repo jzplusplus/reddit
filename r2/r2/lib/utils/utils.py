@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from urllib import unquote_plus
 from urllib2 import urlopen
 from urlparse import urlparse, urlunparse
@@ -28,15 +29,16 @@ from copy import deepcopy
 import cPickle as pickle
 import re, math, random
 
-from BeautifulSoup import BeautifulSoup
+from BeautifulSoup import BeautifulSoup, SoupStrainer
 
 from time import sleep
 from datetime import datetime, timedelta
 from functools import wraps, partial, WRAPPER_ASSIGNMENTS
 from pylons import g
 from pylons.i18n import ungettext, _
-from r2.lib.filters import _force_unicode
+from r2.lib.filters import _force_unicode, _force_utf8
 from mako.filters import url_escape
+import snudown
  
 from r2.lib.utils._utils import *
         
@@ -1121,22 +1123,6 @@ def in_chunks(it, size=25):
         if chunk:
             yield chunk
 
-r_subnet = re.compile("\A(\d+\.\d+)\.\d+\.\d+\Z")
-def ip_and_slash16(req):
-    ip = req.ip
-
-    if ip is None:
-        raise ValueError("request.ip is None")
-    ip = ip.strip()
-
-    m = r_subnet.match(ip)
-    if m is None:
-        raise ValueError("Couldn't parse IP %s" % ip)
-
-    slash16 = m.group(1) + '.x.x'
-
-    return (ip, slash16)
-
 def spaceout(items, targetseconds,
              minsleep = 0, die = False,
              estimate = None):
@@ -1391,3 +1377,15 @@ def wraps_api(f):
     if not hasattr(f, '_api_doc'):
         f._api_doc = {}
     return wraps(f, assigned=WRAPPER_ASSIGNMENTS+('_api_doc',))
+
+
+def extract_urls_from_markdown(md):
+    "Extract URLs that will be hot links from a piece of raw Markdown."
+
+    html = snudown.markdown(_force_utf8(md))
+    links = SoupStrainer("a")
+
+    for link in BeautifulSoup(html, parseOnlyThese=links):
+        url = link.get('href')
+        if url:
+            yield url

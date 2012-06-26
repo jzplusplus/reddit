@@ -11,59 +11,80 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
-from listingcontroller import ListingController
-from listingcontroller import HotController
-from listingcontroller import SavedController
-from listingcontroller import NewController
-from listingcontroller import BrowseController
-from listingcontroller import MessageController
-from listingcontroller import RedditsController
-from listingcontroller import ByIDController as ByidController
-from listingcontroller import RandomrisingController
-from listingcontroller import UserController
-from listingcontroller import CommentsController
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
 
-from listingcontroller import MyredditsController
+_reddit_controllers = {}
+_plugin_controllers = {}
 
-from feedback import FeedbackController
-from front import FormsController
-from front import FrontController
-from health import HealthController
-from buttons import ButtonsController
-from buttons import ButtonjsController
-from captcha import CaptchaController
-from embed import EmbedController
-from error import ErrorController
-from post import PostController
-from toolbar import ToolbarController
-from awards import AwardsController
-from ads import AdsController
-from usage import UsageController
-from errorlog import ErrorlogController
-from promotecontroller import PromoteController
-from mediaembed import MediaembedController
-from mediaembed import AdController
+def get_controller(name):
+    name = name.lower() + 'controller'
+    if name in _reddit_controllers:
+        return _reddit_controllers[name]
+    elif name in _plugin_controllers:
+        return _plugin_controllers[name]
+    else:
+        raise KeyError(name)
 
-from querycontroller import QueryController
+def add_controller(controller):
+    name = controller.__name__.lower()
+    assert name not in _plugin_controllers
+    _plugin_controllers[name] = controller
+    return controller
 
-try:
-    from r2admin.controllers.adminapi import ApiController
-except ImportError:
-    from api import ApiController
+def load_controllers():
+    from listingcontroller import ListingController
+    from listingcontroller import HotController
+    from listingcontroller import NewController
+    from listingcontroller import BrowseController
+    from listingcontroller import MessageController
+    from listingcontroller import RedditsController
+    from listingcontroller import ByIDController
+    from listingcontroller import RandomrisingController
+    from listingcontroller import UserController
+    from listingcontroller import CommentsController
 
-from api import ApiminimalController
-from api_docs import ApidocsController
-from apiv1 import APIv1Controller as Apiv1Controller
-from oauth2 import OAuth2FrontendController as Oauth2frontendController
-from oauth2 import OAuth2AccessController as Oauth2accessController
-from admin import AdminController
-from redirect import RedirectController
-from ipn import IpnController
+    from listingcontroller import MyredditsController
+
+    from feedback import FeedbackController
+    from front import FormsController
+    from front import FrontController
+    from health import HealthController
+    from buttons import ButtonsController
+    from buttons import ButtonjsController
+    from captcha import CaptchaController
+    from embed import EmbedController
+    from error import ErrorController
+    from post import PostController
+    from toolbar import ToolbarController
+    from awards import AwardsController
+    from ads import AdsController
+    from usage import UsageController
+    from errorlog import ErrorlogController
+    from promotecontroller import PromoteController
+    from mediaembed import MediaembedController
+    from mediaembed import AdController
+
+    from querycontroller import QueryController
+
+    try:
+        from r2admin.controllers.adminapi import ApiController
+    except ImportError:
+        from api import ApiController
+
+    from api import ApiminimalController
+    from api_docs import ApidocsController
+    from apiv1 import APIv1Controller
+    from oauth2 import OAuth2FrontendController
+    from oauth2 import OAuth2AccessController
+    from admin import AdminController
+    from redirect import RedirectController
+    from ipn import IpnController
+
+    _reddit_controllers.update((name.lower(), obj) for name, obj in locals().iteritems())

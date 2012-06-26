@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from r2.lib.db.thing import MultiRelation, Relation
 from r2.lib.db import tdb_cassandra
 from r2.lib.db.tdb_cassandra import TdbException
@@ -70,7 +71,7 @@ class CassandraVote(tdb_cassandra.Relation):
         votee = v._thing2
         cvc = cls._rel(Account, votee.__class__)
         try:
-            cv = cvc._fast_query(voter._id36, votee._id36)
+            cv = cvc._fast_query(voter, votee)
         except tdb_cassandra.NotFound:
             cv = cvc(thing1_id = voter._id36, thing2_id = votee._id36)
         cv.name = v._name
@@ -136,8 +137,6 @@ class CassandraLinkVote(CassandraVote):
     _cf_name = 'LinkVote'
     _read_consistency_level = tdb_cassandra.CL.ONE
 
-    # these parameters aren't actually meaningful, they just help
-    # keep track
     # _views = [VotesByLink, VotesByDay]
     _thing1_cls = Account
     _thing2_cls = Link
@@ -161,8 +160,6 @@ class CassandraCommentVote(CassandraVote):
     _cf_name = 'CommentVote'
     _read_consistency_level = tdb_cassandra.CL.ONE
 
-    # these parameters aren't actually meaningful, they just help
-    # keep track
     _thing1_cls = Account
     _thing2_cls = Comment
 
@@ -219,15 +216,13 @@ class Vote(MultiRelation('vote',
 
         v._commit()
 
-        v._fast_query_timestamp_touch(sub)
-
         up_change, down_change = score_changes(amount, oldamount)
 
         if not (is_new and obj.author_id == sub._id and amount == 1):
             # we don't do this if it's the author's initial automatic
             # vote, because we checked it in with _ups == 1
             update_score(obj, up_change, down_change,
-                         v.valid_thing, old_valid_thing)
+                         v, old_valid_thing)
 
         if v.valid_user:
             author = Account._byID(obj.author_id, data=True)
@@ -272,14 +267,12 @@ class Vote(MultiRelation('vote',
         ret = {}
 
         for relcls, items in rels.iteritems():
-            ids = dict((item._id36, item)
-                       for item in items)
-            votes = relcls._fast_query(sub._id36, ids,
+            votes = relcls._fast_query(sub, items,
                                        properties=['name'])
-            for (thing1_id36, thing2_id36), rel in votes.iteritems():
-                ret[(sub, ids[thing2_id36])] = (True if rel.name == '1'
-                                                 else False if rel.name == '-1'
-                                                 else None)
+            for cross, rel in votes.iteritems():
+                ret[cross] = (True if rel.name == '1'
+                              else False if rel.name == '-1'
+                              else None)
         return ret
 
 def test():

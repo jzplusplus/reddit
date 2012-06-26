@@ -11,20 +11,22 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from r2.models import *
 from filters import unsafe, websafe, _force_unicode
 from r2.lib.utils import vote_hash, UrlParser, timesince, is_subdomain
 
 from r2.lib.media import s3_direct_url
 
+import babel.numbers
 from mako.filters import url_escape
 import simplejson
 import os.path
@@ -176,6 +178,19 @@ def calc_time_period(comment_time):
 
     return rv
 
+def comment_label(num_comments=None):
+    if not num_comments:
+        # generates "comment" the imperative verb
+        com_label = _("comment {verb}")
+        com_cls = 'comments empty'
+    else:
+        # generates "XX comments" as a noun
+        com_label = ungettext("comment", "comments", num_comments)
+        com_label = strings.number_label % dict(num=num_comments,
+                                                thing=com_label)
+        com_cls = 'comments'
+    return com_label, com_cls
+
 def replace_render(listing, item, render_func):
     def _replace_render(style = None, display = True):
         """
@@ -228,16 +243,7 @@ def replace_render(listing, item, render_func):
                 replacements['votehash'] = vote_hash(c.user, item,
                                                      listing.vote_hash_type)
         if hasattr(item, "num_comments"):
-            if not item.num_comments:
-                # generates "comment" the imperative verb
-                com_label = _("comment {verb}")
-                com_cls = 'comments empty'
-            else:
-                # generates "XX comments" as a noun
-                com_label = ungettext("comment", "comments", item.num_comments)
-                com_label = strings.number_label % dict(num=item.num_comments,
-                                                        thing=com_label)
-                com_cls = 'comments'
+            com_label, com_cls = comment_label(item.num_comments)
             if style == "compact":
                 com_label = unicode(item.num_comments)
             replacements['numcomments'] = com_label
@@ -262,6 +268,10 @@ def replace_render(listing, item, render_func):
                 replacements['timesince'] = timesince(item._date)
 
             replacements['time_period'] = calc_time_period(item._date)
+
+        # compute the last edited time here so we don't end up caching it
+        if hasattr(item, "editted") and not isinstance(item.editted, bool):
+            replacements['lastedited'] = timesince(item.editted)
 
         # Set in front.py:GET_comments()
         replacements['previous_visits_hex'] = c.previous_visits_hex
@@ -501,3 +511,10 @@ def add_attr(attrs, kind, label=None, link=None, cssclass=None, symbol=None):
         raise ValueError ("Got weird kind [%s]" % kind)
 
     attrs.append( (priority, symbol, cssclass, label, link, img) )
+
+
+def format_number(number, locale=None):
+    if not locale:
+        locale = c.locale
+
+    return babel.numbers.format_number(number, locale=locale)

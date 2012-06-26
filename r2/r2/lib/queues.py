@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 class QueueMap(object):
     """Represents a set of queues and bindings in a single exchange"""
     def __init__(self, exchange, chan, exchange_type='direct',
@@ -75,10 +76,8 @@ class RedditQueueMap(QueueMap):
         self._q('log_q', self_refer=True)
         self._q('usage_q', self_refer=True, durable=False)
 
-        self._q('solrsearch_changes')
-        self._q('indextank_changes', self_refer=True)
-        self._bind('search_changes', 'solrsearch_changes')
-        self._bind('search_changes', 'indextank_changes')
+        self._q('cloudsearch_changes', self_refer=True)
+        self._bind('search_changes', 'cloudsearch_changes')
 
     def bindings(self):
         self.newlink_bindings()

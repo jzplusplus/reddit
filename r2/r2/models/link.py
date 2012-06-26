@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from r2.lib.db.thing import Thing, Relation, NotFound, MultiRelation, \
      CreationError
 from r2.lib.db.operators import desc
@@ -131,6 +132,7 @@ class Link(Thing, Printable):
         l._commit()
         l.set_url_cache()
         if author._spam:
+            g.stats.simple_event('spam.autoremove.link')
             admintools.spam(l, banner='banned user')
         return l
 
@@ -146,7 +148,6 @@ class Link(Thing, Printable):
         except CreationError, e:
             return somethinged(user, self)[(user, self, name)]
 
-        rel._fast_query_timestamp_touch(user)
         return saved
 
     def _unsomething(self, user, somethinged, name):
@@ -336,14 +337,8 @@ class Link(Thing, Printable):
         site = c.site
 
         if user_is_loggedin:
-            saved_lu = []
-            for item in wrapped:
-                if not SaveHide._can_skip_lookup(user, item):
-                    saved_lu.append(item._id36)
-
-            saved  = CassandraSave._fast_query(user._id36, saved_lu)
-            hidden = CassandraHide._fast_query(user._id36, saved_lu)
-
+            saved  = CassandraSave._fast_query(user, wrapped)
+            hidden = CassandraHide._fast_query(user, wrapped)
             clicked = {}
         else:
             saved = hidden = clicked = {}
@@ -408,8 +403,8 @@ class Link(Thing, Printable):
             item.urlprefix = ''
 
             if user_is_loggedin:
-                item.saved =  (user._id36, item._id36) in saved
-                item.hidden = (user._id36, item._id36) in hidden
+                item.saved =  (user, item) in saved
+                item.hidden = (user, item) in hidden
 
                 item.clicked = bool(clicked.get((user, item, 'click')))
             else:
@@ -497,6 +492,7 @@ class Link(Thing, Printable):
             item.commentcls = CachedVariable("commentcls")
             item.midcolmargin = CachedVariable("midcolmargin")
             item.comment_label = CachedVariable("numcomments")
+            item.lastedited = CachedVariable("lastedited")
 
             item.as_deleted = False
             if item.deleted and not c.user_is_admin:
@@ -532,6 +528,40 @@ class Link(Thing, Printable):
             item.expunged = False
             if item.is_self:
                 item.expunged = Link._should_expunge_selftext(item)
+
+            item.editted = getattr(item, "editted", False)
+            
+            taglinetext = ''
+            if item.different_sr:
+                author_text = (" <span>" + _("by %(author)s to %(reddit)s") +
+                               "</span>")
+            else:
+                author_text = " <span>" + _("by %(author)s") + "</span>"
+            if item.editted:
+                if item.score_fmt == Score.points:
+                    taglinetext = ("<span>" +
+                                   _("%(score)s submitted %(when)s "
+                                     "ago%(lastedited)s") +
+                                   "</span>")
+                    taglinetext += author_text
+                elif item.different_sr:
+                    taglinetext = _("submitted %(when)s ago%(lastedited)s "
+                                    "by %(author)s to %(reddit)s")
+                else:
+                    taglinetext = _("submitted %(when)s ago%(lastedited)s "
+                                    "by %(author)s")
+            else:
+                if item.score_fmt == Score.points:
+                    taglinetext = ("<span>" +
+                                   _("%(score)s submitted %(when)s ago") +
+                                   "</span>")
+                    taglinetext += author_text
+                elif item.different_sr:
+                    taglinetext = _("submitted %(when)s ago by %(author)s "
+                                    "to %(reddit)s")
+                else:
+                    taglinetext = _("submitted %(when)s ago by %(author)s")
+            item.taglinetext = taglinetext
 
         if user_is_loggedin:
             incr_counts(wrapped)
@@ -615,6 +645,9 @@ class Comment(Thing, Printable):
                     ip = ip)
 
         c._spam = author._spam
+
+        if author._spam:
+            g.stats.simple_event('spam.autoremove.comment')
 
         #these props aren't relations
         if parent:
@@ -832,6 +865,9 @@ class Comment(Thing, Printable):
                                      nofollow = item.nofollow,
                                      target = item.target,
                                      extra_css = extra_css)
+                                     
+            item.lastedited = CachedVariable("lastedited")
+
         # Run this last
         Printable.add_props(user, wrapped)
 
@@ -960,6 +996,10 @@ class Message(Thing, Printable):
         m = Message(subject=subject, body=body, author_id=author._id, new=True,
                     ip=ip, from_sr=from_sr)
         m._spam = author._spam
+
+        if author._spam:
+            g.stats.simple_event('spam.autoremove.message')
+
         sr_id = None
         # check to see if the recipient is a subreddit and swap args accordingly
         if to and isinstance(to, Subreddit):
@@ -1091,8 +1131,7 @@ class Message(Thing, Printable):
                       for x in wrapped if x.sr_id is not None
                       and isinstance(x.lookups[0], Message))
         # load the unread mod list for the same reason
-        mod_unread = set(queries.merge_results(
-            *[queries.get_unread_subreddit_messages(sr) for sr in msg_srs]))
+        mod_unread = set(queries.get_unread_subreddit_messages_multi(msg_srs))
 
         for item in wrapped:
             item.to = tos.get(item.to_id)
@@ -1213,7 +1252,7 @@ class SimpleRelation(tdb_cassandra.Relation):
     @classmethod
     def _uncreate(cls, user, link):
         try:
-            cls._fast_query(user._id36, link._id36)._destroy()
+            cls._fast_query(user, link)._destroy()
         except tdb_cassandra.NotFound:
             pass
 
@@ -1223,8 +1262,8 @@ class CassandraSave(SimpleRelation):
     _cf_name = 'Save'
     _connection_pool = 'main'
 
-    # thing1_cls = Account
-    # thing2_cls = Link
+    _thing1_cls = Account
+    _thing2_cls = Link
 
     @classmethod
     def _save(cls, *a, **kw):
@@ -1257,6 +1296,9 @@ class CassandraHide(SimpleRelation):
     _ttl = 7*24*60*60
     _connection_pool = 'main'
 
+    _thing1_cls = Account
+    _thing2_cls = Link
+
     @classmethod
     def _hide(cls, *a, **kw):
         return cls._create(*a, **kw)
@@ -1264,10 +1306,6 @@ class CassandraHide(SimpleRelation):
     @classmethod
     def _unhide(cls, *a, **kw):
         return cls._uncreate(*a, **kw)
-
-class CassandraClick(SimpleRelation):
-    _use_db = True
-    _cf_name = 'Click'
 
 class SavesByAccount(tdb_cassandra.View):
     _use_db = True

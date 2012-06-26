@@ -11,15 +11,17 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
-import pylons, sha
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
+import pylons
+import hashlib
 from mako.template import Template as mTemplate
 from mako.exceptions import TemplateLookupException
 from r2.lib.filters import websafe, unsafe
@@ -76,7 +78,7 @@ class tp_manager:
                         if (not hasattr(template, "hash") and
                             hasattr(template, "filename")):
                             with open(template.filename, 'r') as handle:
-                                template.hash = sha.new(handle.read()).hexdigest()
+                                template.hash = hashlib.sha1(handle.read()).hexdigest()
                         # cache also for the base class so
                         # introspection is not required on subsequent passes
                         if key != top_key:

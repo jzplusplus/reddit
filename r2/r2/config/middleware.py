@@ -9,23 +9,29 @@
 #
 # Software distributed under the License is distributed on an "AS IS" basis,
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
-# the specific language governing rig and limitations under the License.
+# the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 """Pylons middleware initialization"""
+import re
+import urllib
+import tempfile
+import urlparse
+from threading import Lock
+
 from paste.cascade import Cascade
 from paste.registry import RegistryManager
-from paste.urlparser import URLParser, StaticURLParser
+from paste.urlparser import StaticURLParser
 from paste.deploy.converters import asbool
-
-from pylons import config, request, Response
+from pylons import config, Response
 from pylons.error import error_template
 from pylons.middleware import ErrorDocuments, ErrorHandler, StaticJavascripts
 from pylons.wsgiapp import PylonsApp, PylonsBaseWSGIApp
@@ -33,14 +39,8 @@ from pylons.wsgiapp import PylonsApp, PylonsBaseWSGIApp
 from r2.config.environment import load_environment
 from r2.config.rewrites import rewrites
 from r2.config.extensions import extension_mapping, set_extension
-from r2.lib.utils import rstrips, is_authorized_cname
-from r2.lib.jsontemplates import api_type
+from r2.lib.utils import is_authorized_cname
 
-#middleware stuff
-from r2.lib.html_source import HTMLValidationParser
-from cStringIO import StringIO
-import sys, tempfile, urllib, re, os, sha, subprocess
-from httplib import HTTPConnection
 
 # hack in Paste support for HTTP 429 "Too Many Requests"
 from paste import httpexceptions, wsgiwrappers
@@ -94,176 +94,40 @@ def error_mapper(code, message, environ, global_conf=None, **kw):
             url = '/error/document/?%s' % (urllib.urlencode(d))
         return url
 
-class DebugMiddleware(object):
-    def __init__(self, app, keyword):
+
+class ProfilingMiddleware(object):
+    def __init__(self, app):
         self.app = app
-        self.keyword = keyword
 
     def __call__(self, environ, start_response):
-        def foo(*a, **kw):
-            self.res = self.app(environ, start_response)
-            return self.res
-        debug = config['global_conf']['debug'].lower() == 'true'
-        args = {}
-        for x in environ['QUERY_STRING'].split('&'):
-            x = x.split('=')
-            args[x[0]] = x[1] if x[1:] else None
-        if debug and self.keyword in args.keys():
-            prof_arg = args.get(self.keyword)
-            prof_arg = urllib.unquote(prof_arg) if prof_arg else None
-            r = self.filter(foo, prof_arg = prof_arg)
-            if isinstance(r, Response):
-                return r(environ, start_response)
-            return r
+        query_params = urlparse.parse_qs(environ['QUERY_STRING'])
+
+        if "profile" in query_params:
+            import cProfile
+
+            def fake_start_response(*args, **kwargs):
+                pass
+
+            try:
+                tmpfile = tempfile.NamedTemporaryFile()
+
+                cProfile.runctx("self.app(environ, fake_start_response)",
+                                globals(),
+                                locals(),
+                                tmpfile.name)
+
+                tmpfile.seek(0)
+
+                start_response('200 OK', 
+                               [('Content-Type', 'application/octet-stream'),
+                                ('Content-Disposition',
+                                 'attachment; filename=profile.bin')])
+                return tmpfile.read()
+            finally:
+                tmpfile.close()
+
         return self.app(environ, start_response)
 
-    def filter(self, execution_func, prof_arg = None):
-        pass
-
-
-class ProfileGraphMiddleware(DebugMiddleware):
-    def __init__(self, app):
-        DebugMiddleware.__init__(self, app, 'profile-graph')
-        
-    def filter(self, execution_func, prof_arg = None):
-        # put thie imports here so the app doesn't choke if profiling
-        # is not present (this is a debug-only feature anyway)
-        import cProfile as profile
-        from pstats import Stats
-        from r2.lib.contrib import gprof2dot
-        # profiling needs an actual file to dump to.  Everything else
-        # can be mitigated with streams
-        tmpfile = tempfile.NamedTemporaryFile()
-        dotfile = StringIO()
-        # simple cutoff validation
-        try:
-            cutoff = .01 if prof_arg is None else float(prof_arg)/100
-        except ValueError:
-            cutoff = .01
-        try:
-            # profile the code in the current context
-            profile.runctx('execution_func()',
-                           globals(), locals(), tmpfile.name)
-            # parse the data
-            parser = gprof2dot.PstatsParser(tmpfile.name)
-            prof = parser.parse()
-            # remove nodes and edges with less than cutoff work
-            prof.prune(cutoff, cutoff)
-            # make the dotfile
-            dot = gprof2dot.DotWriter(dotfile)
-            dot.graph(prof, gprof2dot.TEMPERATURE_COLORMAP)
-            # convert the dotfile to PNG in local stdout
-            proc = subprocess.Popen("dot -Tpng",
-                                    shell = True,
-                                    stdin =subprocess.PIPE,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
-            out, error =  proc.communicate(input = dotfile.getvalue())
-            # generate the response
-            r = Response()
-            r.status_code = 200
-            r.headers['content-type'] = "image/png"
-            r.content = out
-            return r
-        finally:
-            tmpfile.close()
-
-class ProfilingMiddleware(DebugMiddleware):
-    def __init__(self, app):
-        DebugMiddleware.__init__(self, app, 'profile')
-
-    def filter(self, execution_func, prof_arg = None):
-        # put thie imports here so the app doesn't choke if profiling
-        # is not present (this is a debug-only feature anyway)
-        import cProfile as profile
-        from pstats import Stats
-
-        tmpfile = tempfile.NamedTemporaryFile()
-        file = line = func = None
-        sort_order = 'time'
-        if prof_arg:
-            tokens = prof_arg.split(',')
-        else:
-            tokens = ()
-
-        for token in tokens:
-            if token == "cum":
-                sort_order = "cumulative"
-            elif token == "name":
-                sort_order = "name"
-            else:
-                try:
-                    file, line = prof_arg.split(':')
-                    line, func = line.split('(')
-                    func = func.strip(')')
-                except:
-                    file = line = func = None
-
-        try:
-            profile.runctx('execution_func()',
-                           globals(), locals(), tmpfile.name)
-            out = StringIO()
-            stats = Stats(tmpfile.name, stream=out)
-            stats.sort_stats(sort_order, 'calls')
-
-            def parse_table(t, ncol):
-                table = []
-                for s in t:
-                    t = [x for x in s.split(' ') if x]
-                    if len(t) > 1:
-                        table += [t[:ncol-1] + [' '.join(t[ncol-1:])]]
-                return table
-
-            def cmp(n):
-                def _cmp(x, y):
-                    return 0 if x[n] == y[n] else 1 if x[n] < y[n] else -1
-                return _cmp
-
-            if not file:
-                stats.print_stats()
-                stats_str = out.getvalue()
-                statdata = stats_str.split('\n')
-                headers = '\n'.join(statdata[:6])
-                table = parse_table(statdata[6:], 6)
-                from r2.lib.pages import Profiling
-                res = Profiling(header = headers, table = table,
-                                path = request.path).render()
-                return [unicode(res)]
-            else:
-                query = "%s:%s" % (file, line)
-                stats.print_callees(query)
-                stats.print_callers(query)
-                statdata = out.getvalue()
-
-                data =  statdata.split(query)
-                callee = data[2].split('->')[1].split('Ordered by')[0]
-                callee = parse_table(callee.split('\n'), 4)
-                callee.sort(cmp(1))
-                callee = [['ncalls', 'tottime', 'cputime']] + callee
-                i = 4
-                while '<-' not in data[i] and i < len(data): i+= 1
-                caller = data[i].split('<-')[1]
-                caller = parse_table(caller.split('\n'), 4)
-                caller.sort(cmp(1))
-                caller = [['ncalls', 'tottime', 'cputime']] + caller
-                from r2.lib.pages import Profiling
-                res = Profiling(header = prof_arg,
-                                caller = caller, callee = callee,
-                                path = request.path).render()
-                return [unicode(res)]
-        finally:
-            tmpfile.close()
-
-class SourceViewMiddleware(DebugMiddleware):
-    def __init__(self, app):
-        DebugMiddleware.__init__(self, app, 'chk_source')
-
-    def filter(self, execution_func, prof_arg = None):
-        output = execution_func()
-        output = [x for x in output]
-        parser = HTMLValidationParser()
-        res = parser.feed(output[-1])
-        return [res]
 
 class DomainMiddleware(object):
     lang_re = re.compile(r"\A\w\w(-\w\w)?\Z")
@@ -435,6 +299,18 @@ class RewriteMiddleware(object):
 
         return self.app(environ, start_response)
 
+class StaticTestMiddleware(object):
+    def __init__(self, app, static_path, domain):
+        self.app = app
+        self.static_path = static_path
+        self.domain = domain
+
+    def __call__(self, environ, start_response):
+        if environ['HTTP_HOST'] == self.domain:
+            environ['PATH_INFO'] = self.static_path.rstrip('/') + environ['PATH_INFO']
+            return self.app(environ, start_response)
+        raise httpexceptions.HTTPNotFound()
+
 class LimitUploadSize(object):
     """
     Middleware for restricting the size of uploaded files (such as
@@ -462,9 +338,19 @@ class LimitUploadSize(object):
                 return r(environ, start_response)
 
             if cl_int > self.max_size:
+                from r2.lib.strings import string_dict
+                error_msg = string_dict['css_validator_messages']['max_size'] % dict(max_size = self.max_size/1024)
                 r = Response()
                 r.status_code = 413
-                r.content = '<html><head></head><body><script type="text/javascript">parent.too_big();</script>request entity too large</body></html>'
+                r.content = ("<html>"
+                             "<head>"
+                             "<script type='text/javascript'>"
+                             "parent.completedUploadImage('failed',"
+                             "''," 
+                             "''," 
+                             "[['BAD_CSS_NAME', ''], ['IMAGE_ERROR', '", error_msg,"']],"
+                             "'image-upload');"
+                             "</script></head><body>you shouldn\'t be here</body></html>")
                 return r(environ, start_response)
 
         return self.app(environ, start_response)
@@ -497,17 +383,29 @@ class CleanupMiddleware(object):
 
 #god this shit is disorganized and confusing
 class RedditApp(PylonsBaseWSGIApp):
-    def find_controller(self, controller):
-        if controller in self.controller_classes:
-            return self.controller_classes[controller]
+    def __init__(self, *args, **kwargs):
+        super(RedditApp, self).__init__(*args, **kwargs)
+        self._loading_lock = Lock()
+        self._controllers = None
 
-        full_module_name = self.package_name + '.controllers'
-        class_name = controller.capitalize() + 'Controller'
+    def load_controllers(self):
+        with self._loading_lock:
+            if not self._controllers:
+                controllers = __import__(self.package_name + '.controllers').controllers
+                controllers.load_controllers()
+                config['r2.plugins'].load_controllers()
+                self._controllers = controllers
 
-        __import__(self.package_name + '.controllers')
-        mycontroller = getattr(sys.modules[full_module_name], class_name)
-        self.controller_classes[controller] = mycontroller
-        return mycontroller
+        return self._controllers
+
+    def find_controller(self, controller_name):
+        if controller_name in self.controller_classes:
+            return self.controller_classes[controller_name]
+
+        controllers = self.load_controllers()
+        controller_cls = controllers.get_controller(controller_name)
+        self.controller_classes[controller_name] = controller_cls
+        return controller_cls
 
 def make_app(global_conf, full_stack=True, **app_conf):
     """Create a Pylons WSGI application and return it
@@ -529,6 +427,7 @@ def make_app(global_conf, full_stack=True, **app_conf):
 
     # Configure the Pylons environment
     load_environment(global_conf, app_conf)
+    g = config['pylons.g']
 
     # The Pylons WSGI app
     app = PylonsApp(base_wsgi_app=RedditApp)
@@ -539,9 +438,9 @@ def make_app(global_conf, full_stack=True, **app_conf):
     app = CleanupMiddleware(app)
 
     app = LimitUploadSize(app)
-    app = ProfileGraphMiddleware(app)
-    app = ProfilingMiddleware(app)
-    app = SourceViewMiddleware(app)
+
+    if g.config['debug']:
+        app = ProfilingMiddleware(app)
 
     app = DomainListingMiddleware(app)
     app = SubredditMiddleware(app)
@@ -563,9 +462,19 @@ def make_app(global_conf, full_stack=True, **app_conf):
     # Static files
     javascripts_app = StaticJavascripts()
     static_app = StaticURLParser(config['pylons.paths']['static_files'])
-    app = Cascade([static_app, javascripts_app, app])
+    static_cascade = [static_app, javascripts_app, app]
+
+    if config['r2.plugins'] and g.config['uncompressedJS']:
+        plugin_static_apps = Cascade([StaticURLParser(plugin.static_dir)
+                                      for plugin in config['r2.plugins']])
+        static_cascade.insert(0, plugin_static_apps)
+    app = Cascade(static_cascade)
 
     #add the rewrite rules
     app = RewriteMiddleware(app)
+
+    if not g.config['uncompressedJS'] and g.config['debug']:
+        static_fallback = StaticTestMiddleware(static_app, g.config['static_path'], g.config['static_domain'])
+        app = Cascade([static_fallback, app])
 
     return app

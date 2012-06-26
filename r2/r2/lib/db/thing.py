@@ -11,18 +11,19 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
-#TODO byID use Things?
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from __future__ import with_statement
 
-import new, sys, sha
+import new, sys
+import hashlib
 from datetime import datetime
 from copy import copy, deepcopy
 
@@ -342,9 +343,13 @@ class DataThing(object):
     def _id36(self):
         return to36(self._id)
 
+    @classmethod
+    def _fullname_from_id36(cls, id36):
+        return cls._type_prefix + to36(cls._type_id) + '_' + id36
+
     @property
     def _fullname(self):
-        return self._type_prefix + to36(self._type_id) + '_' + to36(self._id)
+        return self._fullname_from_id36(self._id36)
 
     #TODO error when something isn't found?
     @classmethod
@@ -775,30 +780,6 @@ def Relation(type1, type2, denorm1 = None, denorm2 = None):
             self._name = 'un' + self._name
 
         @classmethod
-        def _fast_query_timestamp_touch(cls, thing1):
-            thing_utils.set_last_modified_for_cls(thing1, cls._type_name)
-
-        @classmethod
-        def _can_skip_lookup(cls, thing1, thing2):
-            # we can't possibly have voted on things that were created
-            # after the last time we voted. for relations that have an
-            # invariant like this we can avoid doing these lookups as
-            # long as the relation takes responsibility for keeping
-            # the timestamp up-to-date
-
-            last_done = thing_utils.get_last_modified_for_cls(
-                thing1, cls._type_name)
-
-            if not last_done:
-                return False
-
-            if thing2._date > last_done:
-                return True
-
-            return False
-
-
-        @classmethod
         def _fast_query(cls, thing1s, thing2s, name, data=True, eager_load=True,
                         thing_data=False, timestamp_optimize = False):
             """looks up all the relationships between thing1_ids and
@@ -826,9 +807,6 @@ def Relation(type1, type2, denorm1 = None, denorm2 = None):
                 t2_ids = set()
                 names = set()
                 for t1, t2, name in pairs:
-                    if timestamp_optimize and cls._can_skip_lookup(thing1_dict[t1],
-                                                                   thing2_dict[t2]):
-                        continue
                     t1_ids.add(t1)
                     t2_ids.add(t2)
                     names.add(name)
@@ -996,7 +974,7 @@ class Query(object):
             rules.sort()
             for r in rules:
                 i += str(r)
-        return sha.new(i).hexdigest()
+        return hashlib.sha1(i).hexdigest()
 
     def __iter__(self):
         used_cache = False

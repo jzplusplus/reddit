@@ -11,20 +11,21 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from wrapped import CachedTemplate, Styled
 from pylons import c, request, g
 from utils import  query_string, timeago
 from strings import StringHandler, plurals
 from r2.lib.db import operators
-from r2.lib.indextank import sorts as indextank_sorts
+import r2.lib.search as search
 from r2.lib.filters import _force_unicode
 from pylons.i18n import _
 
@@ -100,6 +101,7 @@ menu =   MenuHandler(hot          = _('hot'),
                      ad_inq       = _("advertise"),
                      gold         = _('reddit gold'),
                      reddits      = _('subreddits'),
+                     team         = _('team'),
 
                      #preferences
                      options      = _('options'),
@@ -458,7 +460,7 @@ class CommentSortMenu(SortMenu):
 class SearchSortMenu(SortMenu):
     """Sort menu for search pages."""
     default   = 'relevance'
-    mapping   = indextank_sorts
+    mapping   = search.sorts
     options   = mapping.keys()
 
     @classmethod

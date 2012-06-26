@@ -11,53 +11,58 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
-import os
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
 
-#import pylons.config
+import os
+import mimetypes
+
 from pylons import config
 
-import mimetypes
-mimetypes.init()
-
-import webhelpers
-
-from   r2.config.routing import make_map
-import r2.lib.app_globals as app_globals
-from   r2.lib import  rpc
+import r2.config
 import r2.lib.helpers
-import r2.config as reddit_config
-
+from r2.config import routing
+from r2.lib.app_globals import Globals
+from r2.lib.configparse import ConfigValue
+from r2.lib.plugin import PluginLoader
 from r2.templates import tmpl_dirs
 
+
+mimetypes.init()
+
+
 def load_environment(global_conf={}, app_conf={}, setup_globals=True):
-    map = make_map(global_conf, app_conf)
     # Setup our paths
     root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     paths = {'root': root_path,
              'controllers': os.path.join(root_path, 'controllers'),
              'templates': tmpl_dirs,
-             'static_files': os.path.join(root_path, 'public')
              }
+
+    if ConfigValue.bool(global_conf.get('uncompressedJS')):
+        paths['static_files'] = os.path.join(root_path, 'public')
+    else:
+        paths['static_files'] = os.path.join(os.path.dirname(root_path), 'build/public')
 
     config.init_app(global_conf, app_conf, package='r2',
                     template_engine='mako', paths=paths)
 
-    g = config['pylons.g'] = app_globals.Globals(global_conf, app_conf, paths)
+    g = config['pylons.g'] = Globals(global_conf, app_conf, paths)
     if setup_globals:
         g.setup()
-        reddit_config.cache = g.cache
+        r2.config.cache = g.cache
 
     config['pylons.h'] = r2.lib.helpers
-    config['routes.map'] = map
+
+    g.plugins = config['r2.plugins'] = PluginLoader().load_plugins(g.config.get('plugins', []))
+    config['routes.map'] = routing.make_map()
 
     #override the default response options
     config['pylons.response_options']['headers'] = {}

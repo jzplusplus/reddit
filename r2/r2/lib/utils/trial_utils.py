@@ -11,17 +11,17 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
 
 from pylons import c, g, request
-from r2.lib.utils import ip_and_slash16, jury_cache_dict, voir_dire_priv, tup
+from r2.lib.utils import jury_cache_dict, voir_dire_priv, tup
 from r2.lib.memoize import memoize
 from r2.lib.log import log_text
 import random as rand
@@ -165,6 +165,8 @@ def assign_trial(account, juries_already_on, ip, slash16):
     return None
 
 def populate_spotlight():
+    raise Exception("this function is broken (re: ip_and_slash16) and pending demolition")
+
     from r2.models import Jury
     from r2.lib.db.thing import NotFound
 

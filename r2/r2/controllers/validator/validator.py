@@ -11,17 +11,19 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from pylons import c, g, request, response
 from pylons.i18n import _
 from pylons.controllers.util import abort
+from r2.config.extensions import api_type
 from r2.lib import utils, captcha, promote
 from r2.lib.filters import unkeep_space, websafe, _force_unicode
 from r2.lib.filters import markdown_souptest
@@ -29,7 +31,6 @@ from r2.lib.db import tdb_cassandra
 from r2.lib.db.operators import asc, desc
 from r2.lib.template_helpers import add_sr
 from r2.lib.jsonresponse import json_respond, JQueryResponse, JsonResponse
-from r2.lib.jsontemplates import api_type
 from r2.lib.log import log_text
 from r2.models import *
 from r2.lib.authorize import Address, CreditCard
@@ -824,7 +825,7 @@ class VSubmitParent(VByName):
                 link = parent
                 if isinstance(parent, Comment):
                     link = Link._byID(parent.link_id, data=True)
-                if c.user_is_loggedin and can_comment_link(link):
+                if link and c.user_is_loggedin and can_comment_link(link):
                     return parent
         #else
         abort(403, "forbidden")
@@ -848,10 +849,6 @@ class VSubmitSR(Validator):
     def run(self, sr_name, link_type = None):
         if not sr_name:
             self.set_error(errors.SUBREDDIT_REQUIRED)
-            return None
-
-        if not chksrname(sr_name):
-            self.set_error(errors.SUBREDDIT_NOEXIST)
             return None
 
         try:
@@ -990,9 +987,6 @@ class VUrl(VRequired):
     def run(self, url, sr = None, resubmit=False):
         if sr is None and not isinstance(c.site, FakeSubreddit):
             sr = c.site
-        elif not chksrname(sr):
-            self.set_error(errors.SUBREDDIT_NOEXIST)
-            sr = None
         elif sr:
             try:
                 sr = Subreddit._by_name(str(sr))
@@ -1031,6 +1025,17 @@ class VUrl(VRequired):
         except IndexError:
             pass
         return params
+
+class VShamedDomain(Validator):
+    def run(self, url):
+        if not url:
+            return
+
+        is_shamed, domain, reason = is_shamed_domain(url, request.ip)
+
+        if is_shamed:
+            self.set_error(errors.DOMAIN_BANNED, dict(domain=domain,
+                                                      reason=reason))
 
 class VExistingUname(VRequired):
     def __init__(self, item, *a, **kw):
@@ -1634,15 +1639,34 @@ class ValidCard(Validator):
                             dict(message=msg), field = field)
 
     def run(self, cardNumber, expirationDate, cardCode):
+        has_errors = False
+
         if not self.valid_ccn.match(cardNumber or ""):
             self.set_error(_("credit card numbers should be 13 to 16 digits"),
                            "cardNumber")
-        elif not self.valid_date.match(expirationDate or ""):
+            has_errors = True
+        
+        if not self.valid_date.match(expirationDate or ""):
             self.set_error(_("dates should be YYYY-MM"), "expirationDate")
-        elif not self.valid_ccv.match(cardCode or ""):
+            has_errors = True
+        else:
+            now = datetime.now()
+            yyyy, mm = expirationDate.split("-")
+            year = int(yyyy)
+            month = int(mm)
+            if month < 1 or month > 12:
+                self.set_error(_("month must be in the range 01..12"), "expirationDate")
+                has_errors = True
+            elif datetime(year, month, now.day) < now:
+                self.set_error(_("expiration date must be in the future"), "expirationDate")
+                has_errors = True
+
+        if not self.valid_ccv.match(cardCode or ""):
             self.set_error(_("card verification codes should be 3 or 4 digits"),
                            "cardCode")
-        else:
+            has_errors = True
+
+        if not has_errors:
             return CreditCard(cardNumber = cardNumber,
                               expirationDate = expirationDate,
                               cardCode = cardCode)

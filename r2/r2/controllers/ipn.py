@@ -1,3 +1,25 @@
+# The contents of this file are subject to the Common Public Attribution
+# License Version 1.0. (the "License"); you may not use this file except in
+# compliance with the License. You may obtain a copy of the License at
+# http://code.reddit.com/LICENSE. The License is based on the Mozilla Public
+# License Version 1.1, but Sections 14 and 15 have been added to cover use of
+# software over a computer network and provide for limited attribution for the
+# Original Developer. In addition, Exhibit A has been modified to be consistent
+# with Exhibit B.
+#
+# Software distributed under the License is distributed on an "AS IS" basis,
+# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
+# the specific language governing rights and limitations under the License.
+#
+# The Original Code is reddit.
+#
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
+#
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from xml.dom.minidom import Document
 from httplib import HTTPSConnection
 from urlparse import urlparse
@@ -24,6 +46,13 @@ def get_blob(code):
         blob['status'] = "locked"
         g.hardcache.set(key, blob, 86400 * 30)
     return key, blob
+
+def has_blob(custom):
+    if not custom:
+        return False
+
+    blob = g.hardcache.get('payment_blob-%s' % custom)
+    return bool(blob)
 
 def dump_parameters(parameters):
     for k, v in parameters.iteritems():
@@ -110,14 +139,20 @@ def verify_ipn(parameters):
         raise ValueError("Invalid IPN response: %r" % status)
 
 
-def existing_subscription(subscr_id, paying_id):
+def existing_subscription(subscr_id, paying_id, custom):
     if subscr_id is None:
         return None
 
     account_id = accountid_from_paypalsubscription(subscr_id)
 
+    if not account_id and has_blob(custom):
+        # New subscription contains the user info in hardcache
+        return None
+
     should_set_subscriber = False
     if account_id is None:
+        # Payment from legacy subscription (subscr_id not set), fall back
+        # to guessing the user from the paying_id
         account_id = account_by_payingid(paying_id)
         should_set_subscriber = True
         if account_id is None:
@@ -396,7 +431,7 @@ class IpnController(RedditController):
         months, days = months_and_days_from_pennies(pennies)
 
         # Special case: autorenewal payment
-        existing = existing_subscription(subscr_id, paying_id)
+        existing = existing_subscription(subscr_id, paying_id, custom)
         if existing:
             if existing != "deleted account":
                 create_claimed_gold ("P" + txn_id, payer_email, paying_id,
@@ -407,9 +442,6 @@ class IpnController(RedditController):
                 g.log.info("Just applied IPN renewal for %s, %d days" %
                            (existing.name, days))
             return "Ok"
-        elif subscr_id:
-            g.log.warning("IPN subscription %s is not associated with anyone"
-                          % subscr_id)
 
         # More sanity checks that all non-autorenewals should pass:
 

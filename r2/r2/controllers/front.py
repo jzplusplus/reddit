@@ -11,36 +11,36 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from validator import *
 from pylons.i18n import _, ungettext
 from reddit_base import RedditController, base_listing, paginated_listing, prevent_framing_and_css
 from r2 import config
 from r2.models import *
+from r2.config.extensions import is_api
 from r2.lib.pages import *
 from r2.lib.pages.things import wrap_links
-from r2.lib.jsontemplates import is_api
 from r2.lib.menus import *
 from r2.lib.utils import to36, sanitize_url, check_cheating, title_to_url
 from r2.lib.utils import query_string, UrlParser, link_from_url, link_duplicates
 from r2.lib.utils import randstr
 from r2.lib.template_helpers import get_domain
-from r2.lib.filters import unsafe
+from r2.lib.filters import unsafe, _force_unicode
 from r2.lib.emailer import has_opted_out, Email
 from r2.lib.db.operators import desc
 from r2.lib.db import queries
 from r2.lib.db.tdb_cassandra import MultiColumnQuery
 from r2.lib.strings import strings
-from r2.lib.solrsearch import RelatedSearchQuery, SubredditSearchQuery
-from r2.lib.indextank import IndextankQuery, IndextankException, InvalidIndextankQuery
-from r2.lib.contrib.pysolr import SolrError
+from r2.lib.search import (SearchQuery, SubredditSearchQuery, SearchException,
+                           InvalidQuery)
 from r2.lib import jsontemplates
 from r2.lib import sup
 import r2.lib.db.thing as thing
@@ -113,13 +113,20 @@ class FrontController(RedditController):
 
     @prevent_framing_and_css()
     @validate(VAdmin(),
-              article = VLink('article'))
-    def GET_details(self, article):
-        """The (now depricated) details page.  Content on this page
+              thing = VByName('article'),
+              oldid36 = nop('article'))
+    def GET_details(self, thing, oldid36):
+        """The (now deprecated) details page.  Content on this page
         has been subsubmed by the presence of the LinkInfoBar on the
         rightbox, so it is only useful for Admin-only wizardry."""
-        return DetailsPage(link = article, expand_children=False).render()
+        if not thing:
+            try:
+                link = Link._byID36(oldid36)
+                return self.redirect('/details/' + link._fullname)
+            except (NotFound, ValueError):
+                abort(404)
 
+        return DetailsPage(thing=thing, expand_children=False).render()
 
     def GET_selfserviceoatmeal(self):
         return BoringPage(_("self service help"), 
@@ -359,6 +366,10 @@ class FrontController(RedditController):
         return res
 
     def GET_stylesheet(self):
+        # de-stale the subreddit object so we don't poison nginx's cache
+        if not isinstance(c.site, FakeSubreddit):
+            c.site = Subreddit._byID(c.site._id, data=True, stale=False)
+
         if hasattr(c.site,'stylesheet_contents') and not g.css_killswitch:
             c.allow_loggedin_cache = True
             self.check_modified(c.site,'stylesheet_contents',
@@ -397,15 +408,12 @@ class FrontController(RedditController):
               action=VOneOf('type', ModAction.actions))
     @api_doc(api_section.moderation)
     def GET_moderationlog(self, num, after, reverse, count, mod, action):
-        if not c.user_is_loggedin:
+        if not c.user_is_loggedin or not (c.user_is_admin or
+                                          c.site.is_moderator(c.user)):
             return self.abort404()
 
         if isinstance(c.site, (MultiReddit, ModSR)):
             srs = Subreddit._byID(c.site.sr_ids, return_dict=False)
-
-            # check that user is mod on all requested srs
-            if not Subreddit.user_mods_all(c.user, srs) and not c.user_is_admin:
-                return self.abort404()
 
             # grab all moderators
             mod_ids = set(Subreddit.get_all_mod_ids(srs))
@@ -416,8 +424,6 @@ class FrontController(RedditController):
         elif isinstance(c.site, FakeSubreddit):
             return self.abort404()
         else:
-            if not c.site.is_moderator(c.user) and not c.user_is_admin:
-                return self.abort404()
             mod_ids = c.site.moderators
             mods = Account._byID(mod_ids, data=True)
 
@@ -440,7 +446,9 @@ class FrontController(RedditController):
                          title=_('filter by action'), type='lightdrop', css_class='modaction-drop'),
                 NavMenu(mod_buttons, base_path=base_path, 
                         title=_('filter by moderator'), type='lightdrop')]
-        return EditReddit(content=panes, nav_menus=menus,
+        return EditReddit(content=panes,
+                          nav_menus=menus,
+                          location="log",
                           extension_handling=False).render()
 
     def _make_spamlisting(self, location, num, after, reverse, count):
@@ -507,7 +515,7 @@ class FrontController(RedditController):
 
         if not c.user_is_loggedin:
             return self.abort404()
-        if isinstance(c.site, ModSR):
+        if isinstance(c.site, (ModSR, MultiReddit)):
             level = 'mod'
         elif isinstance(c.site, ContribSR):
             level = 'contrib'
@@ -527,8 +535,9 @@ class FrontController(RedditController):
         else:
             return self.abort404()
 
-        return EditReddit(content = pane,
-                          extension_handling = extension_handling).render()
+        return EditReddit(content=pane,
+                          location=location,
+                          extension_handling=extension_handling).render()
 
     def _edit_normal_reddit(self, location, num, after, reverse, count, created,
                             name, user):
@@ -540,6 +549,7 @@ class FrontController(RedditController):
             if created == 'true':
                 pane.append(InfoBar(message = strings.sr_created))
             c.allow_styles = True
+            c.site = Subreddit._byID(c.site._id, data=True, stale=False)
             pane.append(CreateSubreddit(site = c.site))
         elif location == 'moderators':
             pane = ModList(editable = is_moderator)
@@ -581,8 +591,9 @@ class FrontController(RedditController):
         else:
             return self.abort404()
 
-        return EditReddit(content = pane,
-                          extension_handling = extension_handling).render()
+        return EditReddit(content=pane,
+                          location=location,
+                          extension_handling=extension_handling).render()
 
     @base_listing
     @prevent_framing_and_css(allow_cname_frame=True)
@@ -599,7 +610,13 @@ class FrontController(RedditController):
                 user = Account._by_name(name)
             except NotFound:
                 c.errors.add(errors.USER_DOESNT_EXIST, field='name')
+        c.profilepage = True
         if isinstance(c.site, ModContribSR):
+            return self._edit_modcontrib_reddit(location, num, after, reverse,
+                                                count, created)
+        elif isinstance(c.site, MultiReddit):
+            if not (c.user_is_admin or c.site.is_moderator(c.user)):
+                self.abort403()
             return self._edit_modcontrib_reddit(location, num, after, reverse,
                                                 count, created)
         elif isinstance(c.site, AllSR) and c.user_is_admin:
@@ -624,35 +641,37 @@ class FrontController(RedditController):
         """The awards page."""
         return BoringPage(_("awards"), content = UserAwards()).render()
 
-    # filter for removing punctuation which could be interpreted as lucene syntax
-    related_replace_regex = re.compile('[?\\&|!{}+~^()":*-]+')
+    # filter for removing punctuation which could be interpreted as search syntax
+    related_replace_regex = re.compile('[?\\&|!{}+~^()"\':*-]+')
     related_replace_with  = ' '
 
     @base_listing
     @validate(article = VLink('article'))
     def GET_related(self, num, article, after, reverse, count):
         """Related page: performs a search using title of article as
-        the search query."""
-
+        the search query.
+        
+        """
         if not can_view_link_comments(article):
             abort(403, 'forbidden')
 
-        title = c.site.name + ((': ' + article.title) if hasattr(article, 'title') else '')
-
         query = self.related_replace_regex.sub(self.related_replace_with,
                                                article.title)
-        if len(query) > 1024:
-            # could get fancier and break this into words, but titles
-            # longer than this are typically ascii art anyway
-            query = query[0:1023]
+        query = _force_unicode(query)
+        query = query[:1024]
+        query = "|".join(query.split())
+        query = "title:'%s'" % query
+        rel_range = timedelta(days=3)
+        start = (article._date - rel_range).strftime("%s")
+        end = (article._date + rel_range).strftime("%s")
+        query = "(and %s timestamp:%s..%s)" % (query, start, end)
+        q = SearchQuery(query, raw_sort="-text_relevance",
+                        syntax="cloudsearch")
+        num, t, pane = self._search(q, num=num, after=after, reverse=reverse,
+                                    count=count)
 
-        q = RelatedSearchQuery(query, ignore = [article._fullname])
-        num, t, pane = self._search(q,
-                                    num = num, after = after, reverse = reverse,
-                                    count = count)
-
-        return LinkInfoPage(link = article, content = pane,
-                            subtitle = _('related')).render()
+        return LinkInfoPage(link=article, content=pane,
+                            subtitle=_('related')).render()
 
     @base_listing
     @validate(article = VLink('article'))
@@ -677,31 +696,34 @@ class FrontController(RedditController):
     @base_listing
     @validate(query = nop('q'))
     @api_doc(api_section.subreddits, uri='/reddits/search', extensions=['json', 'xml'])
-    def GET_search_reddits(self, query, reverse, after,  count, num):
+    def GET_search_reddits(self, query, reverse, after, count, num):
         """Search reddits by title and description."""
         q = SubredditSearchQuery(query)
 
-        num, t, spane = self._search(q, num = num, reverse = reverse,
-                                     after = after, count = count)
+        num, t, spane = self._search(q, num=num, reverse=reverse,
+                                     after=after, count=count,
+                                     skip_deleted_authors=False)
         
         res = SubredditsPage(content=spane,
-                             prev_search = query,
-                             elapsed_time = t,
-                             num_results = num,
+                             prev_search=query,
+                             elapsed_time=t,
+                             num_results=num,
                              # update if we ever add sorts
-                             search_params = {},
-                             title = _("search results"),
+                             search_params={},
+                             title=_("search results"),
                              simple=True).render()
         return res
 
     search_help_page = "/help/search"
     verify_langs_regex = re.compile(r"\A[a-z][a-z](,[a-z][a-z])*\Z")
     @base_listing
-    @validate(query = VLength('q', max_length=512),
-              sort = VMenu('sort', SearchSortMenu, remember=False),
-              restrict_sr = VBoolean('restrict_sr', default=False))
+    @validate(query=VLength('q', max_length=512),
+              sort=VMenu('sort', SearchSortMenu, remember=False),
+              restrict_sr=VBoolean('restrict_sr', default=False),
+              syntax=VOneOf('syntax', options=SearchQuery.known_syntaxes))
     @api_doc(api_section.search, extensions=['json', 'xml'])
-    def GET_search(self, query, num, reverse, after, count, sort, restrict_sr):
+    def GET_search(self, query, num, reverse, after, count, sort, restrict_sr,
+                   syntax):
         """Search links page."""
         if query and '.' in query:
             url = sanitize_url(query, require_scheme = True)
@@ -712,16 +734,19 @@ class FrontController(RedditController):
             site = DefaultSR()
         else:
             site = c.site
+        
+        if not syntax:
+            syntax = SearchQuery.default_syntax
 
         try:
             cleanup_message = None
             try:
-                q = IndextankQuery(query, site, sort)
+                q = SearchQuery(query, site, sort, syntax=syntax)
                 num, t, spane = self._search(q, num=num, after=after, 
                                              reverse = reverse, count = count)
-            except InvalidIndextankQuery:
+            except InvalidQuery:
                 # strip the query down to a whitelist
-                cleaned = re.sub("[^\w\s]+", "", query)
+                cleaned = re.sub("[^\w\s]+", " ", query)
                 cleaned = cleaned.lower()
 
                 # if it was nothing but mess, we have to stop
@@ -729,8 +754,8 @@ class FrontController(RedditController):
                     num, t, spane = 0, 0, []
                     cleanup_message = strings.completely_invalid_search_query
                 else:
-                    q = IndextankQuery(cleaned, site, sort)
-                    num, t, spane = self._search(q, num=num, after=after, 
+                    q = SearchQuery(cleaned, site, sort)
+                    num, t, spane = self._search(q, num=num, after=after,
                                                  reverse=reverse, count=count)
                     cleanup_message = strings.invalid_search_query % {
                                           "clean_query": cleaned
@@ -741,24 +766,29 @@ class FrontController(RedditController):
                                                           }
             
             res = SearchPage(_('search results'), query, t, num, content=spane,
-                             nav_menus = [SearchSortMenu(default=sort)],
-                             search_params = dict(sort = sort), 
+                             nav_menus=[SearchSortMenu(default=sort)],
+                             search_params=dict(sort=sort),
                              infotext=cleanup_message,
-                             simple=False, site=c.site, 
-                             restrict_sr=restrict_sr).render()
+                             simple=False, site=c.site,
+                             restrict_sr=restrict_sr,
+                             syntax=syntax,
+                             converted_data=q.converted_data
+                             ).render()
 
             return res
-        except (IndextankException, socket.error), e:
+        except SearchException + (socket.error,) as e:
             return self.search_fail(e)
 
-    def _search(self, query_obj, num, after, reverse, count=0):
+    def _search(self, query_obj, num, after, reverse, count=0,
+                skip_deleted_authors=True):
         """Helper function for interfacing with search.  Basically a
            thin wrapper for SearchBuilder."""
 
         builder = SearchBuilder(query_obj,
                                 after = after, num = num, reverse = reverse,
                                 count = count,
-                                wrap = ListingController.builder_wrapper)
+                                wrap = ListingController.builder_wrapper,
+                                skip_deleted_authors=skip_deleted_authors)
 
         listing = LinkListing(builder, show_nums=True)
 
@@ -766,7 +796,7 @@ class FrontController(RedditController):
         # computed after fetch_more
         try:
             res = listing.listing()
-        except (IndextankException, SolrError, socket.error), e:
+        except SearchException + (socket.error,) as e:
             return self.search_fail(e)
         timing = time_module.time() - builder.start_time
 

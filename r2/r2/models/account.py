@@ -11,28 +11,31 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from r2.lib.db.thing     import Thing, Relation, NotFound
 from r2.lib.db.operators import lower
 from r2.lib.db.userrel   import UserRel
 from r2.lib.memoize      import memoize
 from r2.lib.utils        import modhash, valid_hash, randstr, timefromnow
-from r2.lib.utils        import UrlParser, set_last_visit, last_visit
+from r2.lib.utils        import UrlParser
 from r2.lib.utils        import constant_time_compare
 from r2.lib.cache        import sgm
 from r2.lib import filters
 from r2.lib.log import log_text
+from r2.models.last_modified import LastModified
 
 from pylons import c, g, request
 from pylons.i18n import _
-import time, sha
+import time
+import hashlib
 from copy import copy
 from datetime import datetime, timedelta
 import bcrypt
@@ -212,15 +215,14 @@ class Account(Thing):
 
         apply_updates(self)
 
-        #prev_visit = getattr(self, 'last_visit', None)
-        prev_visit = last_visit(self)
-
-        if prev_visit and current_time - prev_visit < timedelta(1):
+        prev_visit = LastModified.get(self._fullname, "Visit")
+        if prev_visit and current_time - prev_visit < timedelta(days=1):
             return
 
         g.log.debug ("Updating last visit for %s from %s to %s" %
                     (self.name, prev_visit, current_time))
-        set_last_visit(self)
+
+        LastModified.touch(self._fullname, "Visit")
 
     def make_cookie(self, timestr=None):
         if not self._loaded:
@@ -228,7 +230,7 @@ class Account(Thing):
         timestr = timestr or time.strftime(COOKIE_TIMESTAMP_FORMAT)
         id_time = str(self._id) + ',' + timestr
         to_hash = ','.join((id_time, self.password, g.SECRET))
-        return id_time + ',' + sha.new(to_hash).hexdigest()
+        return id_time + ',' + hashlib.sha1(to_hash).hexdigest()
 
     def make_admin_cookie(self, first_login=None, last_request=None):
         if not self._loaded:
@@ -642,7 +644,7 @@ def valid_feed(name, feedhash, path):
             pass
 
 def make_feedhash(user, path):
-    return sha.new("".join([user.name, user.password, g.FEEDSECRET])
+    return hashlib.sha1("".join([user.name, user.password, g.FEEDSECRET])
                    ).hexdigest()
 
 def make_feedurl(user, path, ext = "rss"):
@@ -701,7 +703,7 @@ def passhash(username, password, salt = ''):
     if salt is True:
         salt = randstr(3)
     tohash = '%s%s %s' % (salt, username, password)
-    return salt + sha.new(tohash).hexdigest()
+    return salt + hashlib.sha1(tohash).hexdigest()
 
 def change_password(user, newpassword):
     user.password = bcrypt_password(newpassword)

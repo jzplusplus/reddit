@@ -4,21 +4,21 @@
 ## http://code.reddit.com/LICENSE. The License is based on the Mozilla Public
 ## License Version 1.1, but Sections 14 and 15 have been added to cover use of
 ## software over a computer network and provide for limited attribution for the
-## Original Developer. In addition, Exhibit A has been modified to be consistent
-## with Exhibit B.
+## Original Developer. In addition, Exhibit A has been modified to be
+## consistent with Exhibit B.
 ##
 ## Software distributed under the License is distributed on an "AS IS" basis,
 ## WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 ## the specific language governing rights and limitations under the License.
 ##
-## The Original Code is Reddit.
+## The Original Code is reddit.
 ##
 ## The Original Developer is the Initial Developer.  The Initial Developer of
-## the Original Code is CondeNet, Inc.
+## the Original Code is reddit Inc.
 ##
-## All portions of the code written by CondeNet are Copyright (c) 2006-2010
-## CondeNet, Inc. All Rights Reserved.
-################################################################################
+## All portions of the code written by reddit are Copyright (c) 2006-2012
+## reddit Inc. All Rights Reserved.
+###############################################################################
 
 <%!
    from r2.models.subreddit import DefaultSR
@@ -27,26 +27,26 @@
 
 <%def name="search_faq()">
   <div id="moresearchinfo">
-  <p>${_('use the following search parameters to narrow your results:')}</p>
+  <p>use the following search parameters to narrow your results:</p>
 
   <dl>
-      <dt>reddit:'{name}'</dt>
+      <dt>reddit:{name}</dt>
       <dd>${_('find things posted in {name} only')}</dd>
-      <dt>author:'{username}'</dt>
+      <dt>author:{username}</dt>
       <dd>${_('return things submitted by {username} only')}</dd>
-      <dt>site:'{domain}'</dt>
+      <dt>site:{domain}</dt>
       <dd>${_('get links to pages on {domain} only')}</dd>
-      <dt>url:'{text}'</dt>
+      <dt>url:{text}</dt>
       <dd>${_('search for {text} in url')}</dd>
-      <dt>selftext:'{text}'</dt>
+      <dt>selftext:{text}</dt>
       <dd>${_('search for {text} in self post contents')}</dd>
-      <dt>is_self:{1|0}</dt>
-      <dd>${_('include (1) or exclude (0) self posts')}</dd>
-      <dt>over18:{1|0}</dt>
-      <dd>${_('include (1) or exclude (0) results tagged NSFW')}</dd>
+      <dt>self:{yes|no}</dt>
+      <dd>${_('include or exclude self posts')}</dd>
+      <dt>nsfw:{yes|no}</dt>
+      <dd>${_('include or exclude nsfw results')}</dd>
   </dl>
 
-  <p>e.g. <code>(and 'dog' reddit:'aww' site:'imgur.com')</code></p>
+  <p>e.g. <code>reddit:pics site:imgur.com dog</code></p>
   <p><a href="http://www.reddit.com/help/search">${_('see the search faq for details.')}</a></p>
   </div>
 
@@ -68,7 +68,6 @@
       % endif
 
       ${search_faq()}
-
   </div>
   %else:
     %if not thing.site or isinstance(thing.site, DefaultSR):

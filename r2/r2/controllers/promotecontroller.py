@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from validator import *
 from pylons.i18n import _
 from r2.models import *
@@ -27,9 +28,8 @@ from r2.lib.pages import *
 from r2.lib.pages.things import wrap_links
 from r2.lib.strings import strings
 from r2.lib.menus import *
-from r2.controllers import ListingController
+from r2.controllers.listingcontroller import ListingController
 from r2.lib.db import queries
-import sha
 
 from r2.controllers.reddit_base import RedditController
 
@@ -78,7 +78,7 @@ class PromoteController(ListingController):
     @validate(VSponsor('link'),
               link = VLink('link'))
     def GET_edit_promo(self, link):
-        if link.promoted is None:
+        if not link or link.promoted is None:
             return self.abort404()
         rendered = wrap_links(link, wrapper = promote.sponsor_wrapper,
                               skip = False)
@@ -416,6 +416,7 @@ class PromoteController(ListingController):
     def POST_update_pay(self, form, jquery, link, indx, customer_id, pay_id,
                         edit, address, creditcard):
         address_modified = not pay_id or edit
+        form_has_errors = False
         if address_modified:
             if (form.has_errors(["firstName", "lastName", "company", "address",
                                  "city", "state", "zip",
@@ -423,13 +424,13 @@ class PromoteController(ListingController):
                                 errors.BAD_ADDRESS) or
                 form.has_errors(["cardNumber", "expirationDate", "cardCode"],
                                 errors.BAD_CARD)):
-                pass
+                form_has_errors = True
             elif g.authorizenetapi:
                 pay_id = edit_profile(c.user, address, creditcard, pay_id)
             else:
                 pay_id = 1
         # if link is in use or finished, don't make a change
-        if pay_id:
+        if pay_id and not form_has_errors:
             # valid bid and created or existing bid id.
             # check if already a transaction
             if g.authorizenetapi:
@@ -451,8 +452,7 @@ class PromoteController(ListingController):
         if c.user_is_loggedin and c.user._id != article.author_id:
             return self.abort404()
 
-        # make sure this is a valid campaign index
-        if indx not in getattr(article, "campaigns", {}):
+        if not promote.is_valid_campaign(article, indx):
             return self.abort404()
 
         if g.authorizenetapi:

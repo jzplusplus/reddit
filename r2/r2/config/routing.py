@@ -11,24 +11,29 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 """
 Setup your Routes options here
 """
 import os
 from routes import Mapper
+from pylons import config
 import admin_routes
 
-def make_map(global_conf={}, app_conf={}):
+def make_map():
     map = Mapper()
     mc = map.connect
+
+    for plugin in config['r2.plugins']:
+        plugin.add_routes(mc)
 
     admin_routes.add(mc)
 
@@ -156,10 +161,11 @@ def make_map(global_conf={}, app_conf={}):
 
     mc('/', controller='hot', action='listing')
 
-    listing_controllers = "hot|saved|new|randomrising|comments"
+    listing_controllers = "hot|new|randomrising|comments"
 
     mc('/:controller', action='listing',
        requirements=dict(controller=listing_controllers))
+    mc('/saved', controller='user', action='saved_redirect')
 
     mc('/by_id/:names', controller='byId', action='listing')
 

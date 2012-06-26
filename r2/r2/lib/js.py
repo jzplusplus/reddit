@@ -1,4 +1,26 @@
 #!/usr/bin/env python
+# The contents of this file are subject to the Common Public Attribution
+# License Version 1.0. (the "License"); you may not use this file except in
+# compliance with the License. You may obtain a copy of the License at
+# http://code.reddit.com/LICENSE. The License is based on the Mozilla Public
+# License Version 1.1, but Sections 14 and 15 have been added to cover use of
+# software over a computer network and provide for limited attribution for the
+# Original Developer. In addition, Exhibit A has been modified to be consistent
+# with Exhibit B.
+#
+# Software distributed under the License is distributed on an "AS IS" basis,
+# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
+# the specific language governing rights and limitations under the License.
+#
+# The Original Code is reddit.
+#
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
+#
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 import sys
 import os.path
 from subprocess import Popen, PIPE
@@ -7,12 +29,17 @@ import json
 
 from r2.lib.translation import iter_langs
 
-if __name__ != "__main__":
-    from pylons import g, c
-    STATIC_ROOT = g.paths["static_files"]
+try:
+    from pylons import g, c, config
+except ImportError:
+    STATIC_ROOT = None
 else:
+    STATIC_ROOT = config["pylons.paths"]["static_files"]
+
+# STATIC_ROOT will be None if pylons is uninitialized
+if not STATIC_ROOT:
     REDDIT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    STATIC_ROOT = os.path.join(REDDIT_ROOT, "public")
+    STATIC_ROOT = os.path.join(os.path.dirname(REDDIT_ROOT), "build/public")
 
 script_tag = '<script type="text/javascript" src="{src}"></script>\n'
 inline_script_tag = '<script type="text/javascript">{content}</script>\n'
@@ -83,18 +110,24 @@ class FileSource(Source):
 
 class Module(Source):
     """A module of JS code consisting of a collection of sources."""
-    def __init__(self, name, *sources):
+    def __init__(self, name, *sources, **kwargs):
         self.name = name
+        self.should_compile = kwargs.get('should_compile', True)
         self.sources = []
         sources = sources or (name,)
         for source in sources:
             if not isinstance(source, Source):
+                if 'prefix' in kwargs:
+                    source = os.path.join(kwargs['prefix'], source)
                 source = FileSource(source)
             self.sources.append(source)
 
     def get_source(self):
         return ";".join(s.get_source() for s in self.sources)
-    
+
+    def extend(self, module):
+        self.sources.extend(module.sources)
+
     @property
     def path(self):
         """The destination path of the module file on the filesystem."""
@@ -103,7 +136,10 @@ class Module(Source):
     def build(self, closure):
         print >> sys.stderr, "Compiling {0}...".format(self.name),
         with open(self.path, "w") as out:
-            closure.compile(self.get_source(), out)
+            if self.should_compile:
+                closure.compile(self.get_source(), out)
+            else:
+                out.write(self.get_source())
         print >> sys.stderr, " done."
 
     def use(self):
@@ -122,7 +158,10 @@ class Module(Source):
 
     @property
     def outputs(self):
-        return [self.path]
+        if self.should_compile:
+            return [self.path]
+        else:
+            return []
 
 class StringsSource(Source):
     """A virtual source consisting of localized strings from r2.lib.strings."""
@@ -134,11 +173,11 @@ class StringsSource(Source):
     def get_source(self):
         from pylons.i18n import get_lang
         from r2.lib import strings, translation
-        
+
         if self.lang:
             old_lang = get_lang()
             translation.set_lang(self.lang)
-        
+
         data = {}
         if self.keys is not None:
             for key in self.keys:
@@ -206,9 +245,12 @@ class LocalizedModule(Module):
             yield LocalizedModule.languagize_path(self.path, lang)
 
 class JQuery(Module):
+    version = "1.7.2"
+
     def __init__(self, cdn_src=None):
-        Module.__init__(self, os.path.join("js", "lib", "jquery.js"))
-        self.cdn_src = cdn_src or "http://ajax.googleapis.com/ajax/libs/jquery/1.6.1/jquery"
+        local_jquery_path = os.path.join("js", "lib", "jquery-%s.min.js" % self.version)
+        Module.__init__(self, local_jquery_path, should_compile=False)
+        self.cdn_src = cdn_src or "http://ajax.googleapis.com/ajax/libs/jquery/%s/jquery" % self.version
     
     def build(self, closure):
         pass
@@ -221,20 +263,13 @@ class JQuery(Module):
             ext = ".js" if g.uncompressedJS else ".min.js"
             return script_tag.format(src=self.cdn_src+ext)
 
-    @property
-    def dependencies(self):
-        return []
-
-    @property
-    def outputs(self):
-        return []
-
 module = {}
 
 module["jquery"] = JQuery()
 
 module["reddit"] = LocalizedModule("reddit.js",
     "lib/json2.js",
+    "lib/store.js",
     "lib/jquery.cookie.js",
     "lib/jquery.url.js",
     "jquery.reddit.js",
@@ -272,15 +307,25 @@ module["flot"] = Module("jquery.flot.js",
 def use(*names):
     return "\n".join(module[name].use() for name in names)
 
+def load_plugin_modules():
+    from r2.lib.plugin import PluginLoader
+    for plugin in PluginLoader.available_plugins():
+        plugin_cls = plugin.load()
+        plugin_cls().add_js(module)
+
 commands = {}
 def build_command(fn):
-    commands[fn.__name__] = fn
-    return fn
+    def wrapped(*args):
+        load_plugin_modules()
+        fn(*args)
+    commands[fn.__name__] = wrapped
+    return wrapped
 
 @build_command
 def enumerate_modules():
-    for m in module:
-        print m
+    for name, m in module.iteritems():
+        if m.should_compile:
+            print name
 
 @build_command
 def dependencies(name):
@@ -288,8 +333,13 @@ def dependencies(name):
         print dep
 
 @build_command
-def enumerate_outputs():
-    for m in module.itervalues():
+def enumerate_outputs(*names):
+    if names:
+        modules = [module[name] for name in names]
+    else:
+        modules = module.itervalues()
+
+    for m in modules:
         for output in m.outputs:
             print output
 

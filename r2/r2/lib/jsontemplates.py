@@ -11,31 +11,23 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from utils import to36, tup, iters
 from wrapped import Wrapped, StringTemplate, CacheStub, CachedVariable, Templated
 from mako.template import Template
+from r2.config.extensions import get_api_subtype
 from r2.lib.filters import spaceCompress, safemarkdown
 import time, pytz
 from pylons import c, g
 from pylons.i18n import _
-
-def api_type(subtype = ''):
-    return 'api-' + subtype if subtype else 'api'
-
-def is_api(subtype = ''):
-    return c.render_style and c.render_style.startswith(api_type(subtype))
-
-def get_api_subtype():
-    if is_api() and c.render_style.startswith('api-'):
-        return c.render_style[4:]
 
 def make_typename(typ):
     return 't%s' % to36(typ._type_id)
@@ -212,6 +204,7 @@ class SubredditJsonTemplate(ThingJsonTemplate):
                                                 url          = "path",
                                                 over18       = "over_18",
                                                 description  = "description",
+                                                public_description = "public_description",
                                                 display_name = "name",
                                                 header_img   = "header",
                                                 header_size  = "header_size",
@@ -292,6 +285,7 @@ class LinkJsonTemplate(ThingJsonTemplate):
                                                 subreddit_id = "subreddit_id",
                                                 is_self      = "is_self", 
                                                 permalink    = "permalink",
+                                                edited       = "editted"
                                                 )
 
     def thing_attr(self, thing, attr):
@@ -306,6 +300,9 @@ class LinkJsonTemplate(ThingJsonTemplate):
                                height = media_embed.height,
                                content = media_embed.content)
            return dict()
+        elif attr == "editted" and not isinstance(thing.editted, bool):
+            return (time.mktime(thing.editted.astimezone(pytz.UTC).timetuple())
+                    - time.timezone)
         elif attr == 'subreddit':
             return thing.subreddit.name
         elif attr == 'subreddit_id':
@@ -351,12 +348,16 @@ class CommentJsonTemplate(ThingJsonTemplate):
                                                 banned_by    = "banned_by",
                                                 approved_by  = "approved_by",
                                                 parent_id    = "parent_id",
+                                                edited       = "editted"
                                                 )
 
     def thing_attr(self, thing, attr):
         from r2.models import Comment, Link, Subreddit
         if attr == 'link_id':
             return make_fullname(Link, thing.link_id)
+        elif attr == "editted" and not isinstance(thing.editted, bool):
+            return (time.mktime(thing.editted.astimezone(pytz.UTC).timetuple())
+                    - time.timezone)
         elif attr == 'subreddit':
             return thing.subreddit.name
         elif attr == 'subreddit_id':
@@ -475,6 +476,9 @@ class NullJsonTemplate(JsonTemplate):
     def render(self, thing = None, *a, **kw):
         return ""
 
+    def get_def(self, name):
+        return self
+
 class ListingJsonTemplate(ThingJsonTemplate):
     _data_attrs_ = dict(children = "things",
                         after = "after",
@@ -592,6 +596,7 @@ class SubredditSettingsTemplate(ThingJsonTemplate):
     _data_attrs_ = dict(subreddit_id = 'site._fullname',
                         title = 'site.title',
                         description = 'site.description',
+                        public_description = 'site.public_description',
                         language = 'site.lang',
                         subreddit_type = 'site.type',
                         content_options = 'site.link_type',

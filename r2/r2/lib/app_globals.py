@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from __future__ import with_statement
 from pylons import config
 import pytz, os, logging, sys, socket, re, subprocess, random
@@ -28,6 +29,7 @@ from urlparse import urlparse
 import json
 from sqlalchemy import engine
 from sqlalchemy import event
+from r2.lib.configparse import ConfigValue, ConfigValueParser
 from r2.lib.cache import LocalCache, SelfEmptyingCache
 from r2.lib.cache import CMemcache, StaleCacheChain
 from r2.lib.cache import HardCache, MemcacheChain, MemcacheChain, HardcacheChain
@@ -39,62 +41,6 @@ from r2.lib.lock import make_lock_factory
 from r2.lib.manager import db_manager
 from r2.lib.stats import Stats, CacheStats, StatsCollectingConnectionPool
 
-class ConfigValue(object):
-    @staticmethod
-    def int(k, v, data):
-        return int(v)
-
-    @staticmethod
-    def float(k, v, data):
-        return float(v)
-
-    @staticmethod
-    def bool(k, v, data):
-        return (v.lower() == 'true') if v else None
-
-    @staticmethod
-    def tuple(k, v, data):
-        return tuple(ConfigValue.to_iter(v))
-
-    @staticmethod
-    def choice(k, v, data):
-        if v not in data:
-            raise ValueError("Unknown option for %r: %r not in %r" % (k, v, data))
-        return data[v]
-
-    @staticmethod
-    def to_iter(v, delim = ','):
-        return (x.strip() for x in v.split(delim) if x)
-
-class ConfigValueParser(dict):
-    def __init__(self, raw_data):
-        dict.__init__(self, raw_data)
-        self.config_keys = {}
-        self.raw_data = raw_data
-
-    def add_spec(self, spec):
-        new_keys = []
-        for parser, keys in spec.iteritems():
-            # keys can be either a list or a dict
-            for key in keys:
-                assert key not in self.config_keys
-                # if keys is a dict, the value is passed as extra data to the parser.
-                extra_data = keys[key] if type(keys) is dict else None
-                self.config_keys[key] = (parser, extra_data)
-                new_keys.append(key)
-        self._update_values(new_keys)
-
-    def _update_values(self, keys):
-        for key in keys:
-            if key not in self.raw_data:
-                continue
-
-            value = self.raw_data[key]
-            if key in self.config_keys:
-                parser, extra_data = self.config_keys[key]
-                value = parser(key, value, extra_data)
-            self[key] = value
-
 class Globals(object):
     spec = {
 
@@ -102,7 +48,6 @@ class Globals(object):
             'db_pool_size',
             'db_pool_overflow_size',
             'page_cache_time',
-            'solr_cache_time',
             'num_mc_clients',
             'MIN_DOWN_LINK',
             'MIN_UP_KARMA',
@@ -130,6 +75,10 @@ class Globals(object):
             'min_membership_create_community',
             'bcrypt_work_factor',
             'cassandra_pool_size',
+            'sr_banned_quota',
+            'sr_moderator_quota',
+            'sr_contributor_quota',
+            'sr_quota_time',
         ],
 
         ConfigValue.float: [
@@ -170,8 +119,10 @@ class Globals(object):
         ],
 
         ConfigValue.tuple: [
+            'plugins',
             'stalecaches',
             'memcaches',
+            'lockcaches',
             'permacache_memcaches',
             'rendercaches',
             'cassandra_seeds',
@@ -276,8 +227,10 @@ class Globals(object):
 
         self.cache_chains = {}
 
+        self.lock_cache = CMemcache(self.lockcaches, num_clients=num_mc_clients)
+        self.make_lock = make_lock_factory(self.lock_cache)
+
         self.memcache = CMemcache(self.memcaches, num_clients = num_mc_clients)
-        self.make_lock = make_lock_factory(self.memcache)
 
         self.stats = Stats(self.config.get('statsd_addr'),
                            self.config.get('statsd_sample_rate'))

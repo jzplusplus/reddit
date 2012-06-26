@@ -11,15 +11,17 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-##############################################################################
-import sha, datetime
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
+import datetime
+import hashlib
 from email.MIMEText import MIMEText
 
 import sqlalchemy as sa
@@ -214,7 +216,7 @@ class EmailHandler(object):
         for email in tup(emails):
             uid = user._id if user else 0
             tid = thing._fullname if thing else ""
-            key = sha.new(str((email, from_name, uid, tid, ip, kind, body,
+            key = hashlib.sha1(str((email, from_name, uid, tid, ip, kind, body,
                                datetime.datetime.now(g.tz)))).hexdigest()
             s.insert().values({s.c.to_addr : email,
                                s.c.account_id : uid,

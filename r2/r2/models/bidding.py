@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from sqlalchemy import Column, String, DateTime, Date, Float, Integer, Boolean,\
      BigInteger, func as safunc, and_, or_
 from sqlalchemy.exc import IntegrityError
@@ -325,6 +326,10 @@ class Bid(Sessionized, Base):
         self.set_status(self.STATUS.CHARGE)
 
     def is_charged(self):
+        '''
+        Returns True if transaction has been charged with authorize.net or is
+        a freebie with "charged" status.
+        '''
         return (self.status == self.STATUS.CHARGE)
 
     def refund(self):

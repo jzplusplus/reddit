@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from __future__ import with_statement
 
 from pylons import c, g
@@ -57,6 +58,7 @@ class Subreddit(Thing, Printable):
                      header_size = None,
                      header_title = "",
                      allow_top = False, # overridden in "_new"
+                     public_description = '',
                      description = '',
                      images = {},
                      reported = 0,
@@ -78,6 +80,7 @@ class Subreddit(Thing, Printable):
                      link_flair_position = '', # one of ('', 'left', 'right')
                      flair_self_assign_enabled = False,
                      link_flair_self_assign_enabled = False,
+                     use_quotas = True,
                      )
     _essentials = ('type', 'name', 'lang')
     _data_int_props = Thing._data_int_props + ('mod_actions', 'reported')
@@ -85,6 +88,8 @@ class Subreddit(Thing, Printable):
     sr_limit = 50
     gold_limit = 100
     DEFAULT_LIMIT = object()
+
+    MAX_SRNAME_LENGTH = 200 # must be less than max memcached key length
 
     # note: for purposely unrenderable reddits (like promos) set author_id = -1
     @classmethod
@@ -115,6 +120,16 @@ class Subreddit(Thing, Printable):
 
     @classmethod
     def _by_name(cls, names, stale=False, _update = False):
+        '''
+        Usages: 
+        1. Subreddit._by_name('funny') # single sr name
+        Searches for a single subreddit. Returns a single Subreddit object or 
+        raises NotFound if the subreddit doesn't exist.
+        2. Subreddit._by_name(['aww','iama']) # list of sr names
+        Searches for a list of subreddits. Returns a dict mapping srnames to 
+        Subreddit objects. Items that were not found are ommitted from the dict.
+        If no items are found, an empty dict is returned.
+        '''
         #lower name here so there is only one cache
         names, single = tup(names, True)
 
@@ -126,6 +141,8 @@ class Subreddit(Thing, Printable):
 
             if lname in cls._specials:
                 ret[name] = cls._specials[lname]
+            elif len(lname) > Subreddit.MAX_SRNAME_LENGTH:
+                g.log.debug("Subreddit._by_name() ignoring invalid srname (too long): %s", lname)
             else:
                 to_fetch[lname] = name
 
@@ -373,7 +390,11 @@ class Subreddit(Thing, Printable):
 
             #will seem less horrible when add_props is in pages.py
             from r2.lib.pages import UserText
-            item.usertext = UserText(item, item.description, target=target)
+            item.description_usertext = UserText(item, item.description, target=target)
+            if item.public_description or item.description:
+                item.public_description_usertext = UserText(item, item.public_description or item.description, target=target)
+            else:
+                item.public_description_usertext = None
 
 
         Printable.add_props(user, wrapped)
@@ -624,17 +645,6 @@ class Subreddit(Thing, Printable):
         return not self.__eq__(other)
 
     @staticmethod
-    def user_mods_all(user, srs):
-        # Get moderator SRMember relations for all in srs
-        # if a relation doesn't exist there will be a None entry in the
-        # returned dict
-        mod_rels = SRMember._fast_query(srs, user, 'moderator', data=False)
-        if None in mod_rels.values():
-            return False
-        else:
-            return True
-
-    @staticmethod
     def get_all_mod_ids(srs):
         from r2.lib.db.thing import Merge
         srs = tup(srs)
@@ -804,6 +814,9 @@ class _DefaultSR(FakeSubreddit):
     path = '/'
     header = g.default_header_url
 
+    def is_moderator(self, user):
+        return False
+
     def get_links_sr_ids(self, sr_ids, sort, time):
         from r2.lib.db import queries
         from r2.models import Link
@@ -878,8 +891,6 @@ class DefaultSR(_DefaultSR):
     def sponsorship_img(self):
         return self._base.sponsorship_img if self._base else ""
 
-
-
 class MultiReddit(_DefaultSR):
     name = 'multi'
     header = ""
@@ -889,14 +900,28 @@ class MultiReddit(_DefaultSR):
         self.real_path = path
         self.sr_ids = sr_ids
 
-        srs = Subreddit._byID(self.sr_ids, return_dict=False)
+        self.srs = Subreddit._byID(self.sr_ids, return_dict=False)
         self.banned_sr_ids = []
         self.kept_sr_ids = []
-        for sr in srs:
+        for sr in self.srs:
             if sr._spam:
                 self.banned_sr_ids.append(sr._id)
             else:
                 self.kept_sr_ids.append(sr._id)
+
+    def is_moderator(self, user):
+        if not user:
+            return False
+
+        # Get moderator SRMember relations for all in srs
+        # if a relation doesn't exist there will be a None entry in the
+        # returned dict
+        mod_rels = SRMember._fast_query(self.srs, user,
+                                        'moderator', data=False)
+        if None in mod_rels.values():
+            return False
+        else:
+            return True
 
     @property
     def path(self):
@@ -922,15 +947,14 @@ class RandomNSFWReddit(FakeSubreddit):
     name = 'randnsfw'
     header = ""
 
-class ModContribSR(_DefaultSR):
+class ModContribSR(MultiReddit):
     name  = None
     title = None
     query_param = None
     real_path = None
 
-    @property
-    def path(self):
-        return '/r/' + self.real_path
+    def __init__(self):
+        MultiReddit.__init__(self, self.sr_ids, self.real_path)
 
     @property
     def sr_ids(self):
@@ -939,17 +963,18 @@ class ModContribSR(_DefaultSR):
         else:
             return []
 
-    def rising_srs(self):
+    @property
+    def kept_sr_ids(self):
         return self.sr_ids
 
-    def get_links(self, sort, time):
-        return self.get_links_sr_ids(self.sr_ids, sort, time)
-
 class ModSR(ModContribSR):
-    name  = "communities you moderate"
-    title = "communities you moderate"
+    name  = "subreddits you moderate"
+    title = "subreddits you moderate"
     query_param = "moderator"
     real_path = "mod"
+
+    def is_moderator(self, user):
+        return True
 
 class ContribSR(ModContribSR):
     name  = "contrib"
@@ -988,8 +1013,6 @@ class DomainSR(FakeSubreddit):
 
     def get_links(self, sort, time):
         from r2.lib.db import queries
-        # TODO: once the lists are precomputed properly, this can be
-        # switched over to use the non-_old variety.
         return queries.get_domain_links(self.domain, sort, time)
 
 Frontpage = DefaultSR()

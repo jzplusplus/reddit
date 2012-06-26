@@ -11,14 +11,16 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
+import subprocess
 
 from pylons import g, config
 
@@ -48,6 +50,13 @@ threads = 20
 log = g.log
 
 MEDIA_FILENAME_LENGTH = 12
+
+
+def optimize_jpeg(filename, optimizer):
+    if optimizer:
+        with open(os.path.devnull, 'w') as devnull:
+            subprocess.check_call((optimizer, filename),
+                                  stdout=devnull)
 
 
 def thumbnail_url(link):
@@ -116,6 +125,8 @@ def upload_media(image, never_expire=True, file_type='.jpg'):
         
         if file_type == ".png":
             optimize_png(f.name, g.png_optimizer)
+        elif file_type == ".jpg":
+            optimize_jpeg(f.name, g.jpeg_optimizer)
         contents = open(f.name).read()
         file_name = get_filename_from_content(contents)
         if g.media_store == "s3":

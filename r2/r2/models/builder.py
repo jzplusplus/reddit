@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from account import *
 from link import *
 from vote import *
@@ -272,6 +273,8 @@ class Builder(object):
             return False
         if hasattr(item, 'subreddit') and not item.subreddit.can_view(user):
             return True
+        if hasattr(item, 'can_view_slow') and not item.can_view_slow():
+            return True
 
 class QueryBuilder(Builder):
     def __init__(self, query, wrap=Wrapped, keep_fn=None, skip=False, **kw):
@@ -458,6 +461,10 @@ class IDBuilder(QueryBuilder):
         return done, new_items
 
 class SearchBuilder(IDBuilder):
+    def __init__(self, query, wrap=Wrapped, keep_fn=None, skip=False,
+                 skip_deleted_authors=True, **kw):
+        IDBuilder.__init__(self, query, wrap, keep_fn, skip, **kw)
+        self.skip_deleted_authors = skip_deleted_authors
     def init_query(self):
         self.skip = True
 
@@ -479,6 +486,9 @@ class SearchBuilder(IDBuilder):
         # them in normal listings
         # TODO: Consider a flag to disable this (and see listingcontroller.py)
         if item._spam or item._deleted:
+            return False
+        elif (self.skip_deleted_authors and
+              getattr(item, "author", None) and item.author._deleted):
             return False
         else:
             return True
@@ -529,8 +539,18 @@ class ModeratorMessageBuilder(MessageBuilder):
     def get_tree(self):
         if self.parent:
             return conversation(self.user, self.parent)
-        return moderator_messages(self.user)
+        sr_ids = Subreddit.reverse_moderator_ids(self.user)
+        return moderator_messages(sr_ids)
 
+class MultiredditMessageBuilder(MessageBuilder):
+    def __init__(self, user, **kw):
+        self.user = user
+        MessageBuilder.__init__(self, **kw)
+
+    def get_tree(self):
+        if self.parent:
+            return conversation(self.user, self.parent)
+        return moderator_messages(c.site.sr_ids)
 
 class TopCommentBuilder(CommentBuilder):
     """A comment builder to fetch only the top-level, non-spam,

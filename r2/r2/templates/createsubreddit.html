@@ -4,21 +4,21 @@
 ## http://code.reddit.com/LICENSE. The License is based on the Mozilla Public
 ## License Version 1.1, but Sections 14 and 15 have been added to cover use of
 ## software over a computer network and provide for limited attribution for the
-## Original Developer. In addition, Exhibit A has been modified to be consistent
-## with Exhibit B.
+## Original Developer. In addition, Exhibit A has been modified to be
+## consistent with Exhibit B.
 ##
 ## Software distributed under the License is distributed on an "AS IS" basis,
 ## WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 ## the specific language governing rights and limitations under the License.
 ##
-## The Original Code is Reddit.
+## The Original Code is reddit.
 ##
 ## The Original Developer is the Initial Developer.  The Initial Developer of
-## the Original Code is CondeNet, Inc.
+## the Original Code is reddit Inc.
 ##
-## All portions of the code written by CondeNet are Copyright (c) 2006-2010
-## CondeNet, Inc. All Rights Reserved.
-################################################################################
+## All portions of the code written by reddit are Copyright (c) 2006-2012
+## reddit Inc. All Rights Reserved.
+###############################################################################
 
 <%!
    from r2.lib.filters import keep_space
@@ -35,19 +35,6 @@
        id="${thing.site._fullname}"
      %endif
      >
-%if thing.site:
-  <h1>${_("community settings")}
-  %if thing.site:
-    | &#32;<strong>${thing.site.name}</strong>
-  %endif
-  </h1>
-%else:
-  %if thing.name:
-    <p class="infobar">
-      ${_("that subreddit doesn't exist, but you can create it here.")}</p>
-  %endif
-  <h1>${_("create a community")}</h1>
-%endif
 
 <div class="pretty-form" id="sr-form">
 
@@ -79,7 +66,16 @@
   </%utils:line_field>
 
   <%utils:line_field title="${_('description')}" css_class="usertext"
-                     description="${_('500 characters max.  Make them count.')}">
+                     description="${_('publicly describe your subreddit for all to see. 500 characters max.')}">
+    %if thing.site and thing.site.public_description:
+     ${UserText(None, text=thing.site.public_description or "", editable=True, creating=True, name="public_description", have_form=False)}
+    %else:
+     ${UserText(None, text="", creating=True, name="public_description", have_form=False)}
+    %endif
+  </%utils:line_field>
+
+  <%utils:line_field title="${_('sidebar')}" css_class="usertext"
+                     description="${_('shown in the sidebar of your subreddit. 5120 characters max.')}">
     %if thing.site and thing.site.description:
      ${UserText(None, text = thing.site.description or "", editable = True, creating = True, name="description", have_form = False)}
     %else:
@@ -154,6 +150,7 @@
     </div>
   </%utils:line_field>
 
+% if thing.site and thing.site.domain != thing.site._defaults['domain']:
   <%utils:line_field title="${_('domain')}" css_class="usertext">
     <div class="delete-field">
       %if thing.site and c.site.domain:
@@ -188,6 +185,7 @@
       </div>
     </div>
   </%utils:line_field>
+% endif
 
 %if thing.site:
   <input type="hidden" name="sr" value="${thing.site._fullname}"/> 

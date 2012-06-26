@@ -6,19 +6,19 @@
 # software over a computer network and provide for limited attribution for the
 # Original Developer. In addition, Exhibit A has been modified to be consistent
 # with Exhibit B.
-# 
+#
 # Software distributed under the License is distributed on an "AS IS" basis,
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
-# 
-# The Original Code is Reddit.
-# 
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
-# 
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+#
+# The Original Code is reddit.
+#
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
+#
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
 
 SHELL=/bin/sh
 PYTHON=python
@@ -29,6 +29,13 @@ BUILD_DIR=build
 .PHONY: clean
 all: pyx static ini
 clean: clean_pyx clean_i18n clean_static
+
+DEFS_PY := Makefile.py
+DEFS_FILE := Makefile.defs
+.PHONY: $(DEFS_FILE)
+$(shell $(PYTHON) $(DEFS_PY) > $(DEFS_FILE))
+include $(DEFS_FILE)
+$(info [+] including definitions from $(DEFS_PY))
 
 #################### Cython
 PYX_FILES := $(shell find . -name \*.pyx)
@@ -53,7 +60,6 @@ clean_pyx:
 	rm -f $(PYX_BUILDSTAMP) $(PYX_C_FILES) $(PYX_SO_FILES)
 
 #################### i18n
-I18NPATH := $(shell $(PYTHON) -c 'from r2.lib.translation import I18N_PATH; print I18N_PATH')
 STRINGS_FILE := r2/lib/strings.py
 RAND_STRINGS_FILE := r2/lib/rand_strings.py
 POTFILE := $(I18NPATH)/r2.pot
@@ -83,25 +89,54 @@ $(INIFILES): %.ini: %.update
 clean_ini:
 	rm $(INIFILES)
 
+#################### CSS file lists
+SPRITED_STYLESHEETS += reddit.css compact.css
+OTHER_STYLESHEETS := reddit-ie6-hax.css reddit-ie7-hax.css mobile.css
+
 #################### Static Files
-STATIC_DIR := r2/public/static
+STATIC_ROOT := r2/public
+STATIC_FILES := $(shell find $(STATIC_ROOT) -readable)
+STATIC_BUILD_ROOT := $(BUILD_DIR)/public
+STATIC_BUILD_DIR := $(STATIC_BUILD_ROOT)/static
+STATIC_BUILDSTAMP := $(BUILD_DIR)/static-buildstamp
 
 .PHONY: clean_static
 
-static: pyx css js names
+static: plugin_static pyx css js names
 
-clean_static: clean_css clean_js clean_names
+clean_static:
+	rm -rf $(STATIC_BUILDSTAMP) $(STATIC_BUILD_DIR) $(PLUGIN_BUILDSTAMPS) $(JS_MODULE_BUILDSTAMPS) $(MANGLE_BUILDSTAMP)
+
+$(STATIC_BUILDSTAMP): $(STATIC_FILES)
+	cp -ruTL $(STATIC_ROOT) $(STATIC_BUILD_ROOT)
+	touch $@
+
+#################### Plugin static files
+PLUGIN_BUILDSTAMPS := $(foreach plugin,$(PLUGINS),$(BUILD_DIR)/plugin-$(plugin)-buildstamp)
+
+plugin_static: $(PLUGIN_BUILDSTAMPS)
+
+define PLUGIN_STATIC_TEMPLATE
+$(BUILD_DIR)/plugin-$(1)-buildstamp: $(STATIC_BUILDSTAMP) $(shell find $(PLUGIN_PATH_$(1))/public)
+	if [ -f $(PLUGIN_PATH_$(1))/../Makefile ]; then \
+		$(MAKE) -C $(PLUGIN_PATH_$(1))/../ static; \
+	fi
+	cp -r --preserve=timestamps $(PLUGIN_PATH_$(1))/public/* $(STATIC_BUILD_ROOT)/
+	touch $$@
+
+$(info [+] adding make rules from plugin "$(1)")
+-include $(PLUGIN_PATH_$(1))/../Makefile.plugin
+endef
+$(foreach plugin,$(PLUGINS),$(eval $(call PLUGIN_STATIC_TEMPLATE,$(plugin))))
 
 #### Stylesheets
 CSS_COMPRESS := $(SED) -e 's/ \+/ /' -e 's/\/\*.*\*\///g' -e 's/: /:/' | grep -v "^ *$$"
-CSS_SOURCE_DIR := $(STATIC_DIR)/css
+CSS_SOURCE_DIR := $(STATIC_BUILD_DIR)/css
 
-SPRITED_STYLESHEETS := reddit.css compact.css
-PROCESSED_SPRITED_STYLESHEETS := $(addprefix $(STATIC_DIR)/, $(SPRITED_STYLESHEETS))
-SPRITES := $(addprefix $(STATIC_DIR)/, $(patsubst %.css,sprite-%.png, $(SPRITED_STYLESHEETS)))
+PROCESSED_SPRITED_STYLESHEETS := $(addprefix $(STATIC_BUILD_DIR)/, $(SPRITED_STYLESHEETS))
+SPRITES := $(addprefix $(STATIC_BUILD_DIR)/, $(patsubst %.css,sprite-%.png, $(SPRITED_STYLESHEETS)))
 
-OTHER_STYLESHEETS := reddit-ie6-hax.css reddit-ie7-hax.css mobile.css
-MINIFIED_OTHER_STYLESHEETS := $(addprefix $(STATIC_DIR)/, $(OTHER_STYLESHEETS))
+MINIFIED_OTHER_STYLESHEETS := $(addprefix $(STATIC_BUILD_DIR)/, $(OTHER_STYLESHEETS))
 
 PROCESSED_STYLESHEETS := $(PROCESSED_SPRITED_STYLESHEETS) $(MINIFIED_OTHER_STYLESHEETS)
 RTL_STYLESHEETS := $(PROCESSED_STYLESHEETS:.css=-rtl.css)
@@ -110,18 +145,19 @@ CSS_OUTPUTS = $(PROCESSED_STYLESHEETS) $(RTL_STYLESHEETS) $(SPRITES)
 
 .PHONY: clean_css
 
-css: $(CSS_OUTPUTS)
+css: $(STATIC_BUILDSTAMP) $(CSS_OUTPUTS)
 
-$(MINIFIED_OTHER_STYLESHEETS): $(STATIC_DIR)/%.css: $(CSS_SOURCE_DIR)/%.css
+
+$(MINIFIED_OTHER_STYLESHEETS): $(STATIC_BUILD_DIR)/%.css: $(CSS_SOURCE_DIR)/%.css
 	# when static file names are mangled, the original becomes a symlink to the mangled name
 	# remove the original file here in case it's a symlink so we don't just rewrite the old file
 	rm -f $@
 	$(CAT) $< | $(CSS_COMPRESS) > $@
 
-$(STATIC_DIR)/sprite-%.png $(STATIC_DIR)/%.css: $(CSS_SOURCE_DIR)/%.css
+$(STATIC_BUILD_DIR)/sprite-%.png $(STATIC_BUILD_DIR)/%.css: $(CSS_SOURCE_DIR)/%.css $(STATIC_BUILDSTAMP)
 	# see above
-	rm -f $(STATIC_DIR)/sprite-$*.png $(STATIC_DIR)/$*.css
-	$(PYTHON) r2/lib/nymph.py $< $(STATIC_DIR)/sprite-$*.png | $(CSS_COMPRESS) > $(STATIC_DIR)/$*.css
+	rm -f $(STATIC_BUILD_DIR)/sprite-$*.png $(STATIC_BUILD_DIR)/$*.css
+	$(PYTHON) r2/lib/nymph.py $< $(STATIC_BUILD_DIR)/sprite-$*.png | $(CSS_COMPRESS) > $(STATIC_BUILD_DIR)/$*.css
 
 $(RTL_STYLESHEETS): %-rtl.css : %.css
 	# see above
@@ -135,18 +171,18 @@ clean_css:
 	rm -f $(CSS_OUTPUTS)
 
 #### JS
-JS_MODULES := $(shell $(PYTHON) r2/lib/js.py enumerate_modules)
-JS_MODULE_BUILDSTAMPS := $(foreach module,$(JS_MODULES),$(BUILD_DIR)/$(module)-js-buildstamp)
-JS_OUTPUTS := $(shell $(PYTHON) r2/lib/js.py enumerate_outputs)
+JS_MODULE_BUILDSTAMPS := $(foreach module,$(JS_MODULES),$(BUILD_DIR)/js-$(module)-buildstamp)
 
 .PHONY: clean_js
 
-js: $(JS_MODULE_BUILDSTAMPS)
+js: $(STATIC_BUILDSTAMP) $(JS_MODULE_BUILDSTAMPS)
 
 $(JS_OUTPUTS): $(JS_MODULE_BUILDSTAMPS)
 
 define JS_MODULE_TEMPLATE
-$(BUILD_DIR)/$(1)-js-buildstamp: $$(shell $(PYTHON) r2/lib/js.py dependencies $(1))
+$(BUILD_DIR)/js-$(1)-buildstamp: $(JS_MODULE_DEPS_$(1))
+	# remove mangled output symlinks, similar to above.
+	rm -f $(JS_MODULE_OUTPUTS_$(1))
 	paster run standalone r2/lib/js.py -c "build_module('$(1)')"
 	touch $$@
 endef
@@ -156,12 +192,12 @@ endef
 $(foreach module,$(JS_MODULES),$(eval $(call JS_MODULE_TEMPLATE,$(module))))
 
 clean_js:
-	rm -f $(JS_MODULE_BUILDSTAMPS) $(STATIC_DIR)/*.js
+	rm -f $(JS_MODULE_BUILDSTAMPS) $(STATIC_BUILD_DIR)/*.js
 
 #### name mangling
 MANGLEABLE_FILES := $(CSS_OUTPUTS) $(JS_OUTPUTS)
 MANGLE_BUILDSTAMP := $(BUILD_DIR)/mangle-buildstamp
-NAMES_FILE := $(STATIC_DIR)/names.json
+NAMES_FILE := $(STATIC_BUILD_DIR)/names.json
 MANGLED_FILES := $(wildcard $(foreach file,$(MANGLEABLE_FILES),$(basename $(file)).*$(suffix $(file))))
 
 .PHONY: clean_names
@@ -173,10 +209,10 @@ $(MANGLE_BUILDSTAMP): $(MANGLEABLE_FILES)
 	touch $@
 
 clean_names:
-	rm -f $(MANGLE_BUILDSTAMP) $(NAMES_FILES) $(MANGLED_FILES)
+	rm -f $(MANGLE_BUILDSTAMP) $(NAMES_FILES) $(MANGLEABLE_FILES) $(MANGLED_FILES) $(JS_MODULE_BUILDSTAMPS)
 
 #### gzip!
-GZIPPABLE := $(filter %.css %.js,$(MANGLED_FILES) $(STATIC_DIR)/js/lib/jquery.js)
+GZIPPABLE := $(filter %.css %.js,$(MANGLED_FILES) $(STATIC_BUILD_DIR)/js/lib/jquery.js)
 GZIPPED := $(addsuffix .gzip,$(GZIPPABLE))
 
 .PHONY: clean_gzip
@@ -188,3 +224,5 @@ $(GZIPPED): %.gzip: %
 
 clean_gzip:
 	rm -f $(GZIPPED)
+
+$(shell rm -f $(DEFS_FILE))

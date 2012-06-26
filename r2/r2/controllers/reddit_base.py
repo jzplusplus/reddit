@@ -11,23 +11,23 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from mako.filters import url_escape
-import r2.lib.helpers as h
 from pylons import c, g, request
 from pylons.controllers.util import abort, redirect_to
 from pylons.i18n import _
 from pylons.i18n.translation import LanguageError
 from r2.lib.base import BaseController, proxyurl
 from r2.lib import pages, utils, filters, amqp, stats
-from r2.lib.utils import http_utils, is_subdomain, UniqueIterator, ip_and_slash16
+from r2.lib.utils import http_utils, is_subdomain, UniqueIterator
 from r2.lib.cache import LocalCache, make_key, MemcachedError
 import random as rand
 from r2.models.account import valid_cookie, FakeAccount, valid_feed, valid_admin_cookie
@@ -36,7 +36,8 @@ from r2.models import *
 from errors import ErrorSet
 from validator import *
 from r2.lib.template_helpers import add_sr
-from r2.lib.jsontemplates import api_type, is_api
+from r2.config.extensions import is_api
+from r2.lib.translation import set_lang
 
 from Cookie import CookieError
 from copy import copy
@@ -46,6 +47,7 @@ from hashlib import sha1, md5
 from urllib import quote, unquote
 import simplejson
 import locale, socket
+import babel.core
 
 from r2.lib.tracking import encrypt, decrypt
 from pylons import Response
@@ -360,9 +362,6 @@ def set_host_lang():
         c.host_lang = host_lang
 
 def set_iface_lang():
-    # TODO: internationalize.  This seems the best place to put this
-    # (used for formatting of large numbers to break them up with ",").
-    # unfortunately, not directly compatible with gettext
     locale.setlocale(locale.LC_ALL, g.locale)
     lang = [g.lang]
     # GET param wins
@@ -381,12 +380,17 @@ def set_iface_lang():
     #one
     for l in lang:
         try:
-            h.set_lang(l, fallback_lang=g.lang)
+            set_lang(l, fallback_lang=g.lang)
             c.lang = l
             break
-        except h.LanguageError:
+        except LanguageError:
             #we don't have a translation for that language
-            h.set_lang(g.lang, graceful_fail = True)
+            set_lang(g.lang, graceful_fail=True)
+
+    try:
+        c.locale = babel.core.Locale.parse(c.lang, sep='-')
+    except (babel.core.UnknownLocaleError, ValueError):
+        c.locale = babel.core.Locale.parse(g.lang, sep='-')
 
     #TODO: add exceptions here for rtl languages
     if c.lang in ('ar', 'he', 'fa'):
@@ -452,9 +456,8 @@ def throttled(key):
     return g.cache.get("throttle_" + key)
 
 def ratelimit_throttled():
-    ip, slash16 = ip_and_slash16(request)
-
-    if throttled(ip) or throttled(slash16):
+    ip = request.ip.strip()
+    if throttled(ip):
         abort(429)
 
 
@@ -892,15 +895,16 @@ class RedditController(MinimalController):
                 return self.intermediate_redirect("/over18")
 
         #check whether to allow custom styles
-        c.allow_styles = self.allow_stylesheets
+        c.allow_styles = True
+        c.can_apply_styles = self.allow_stylesheets
         if g.css_killswitch:
-            c.allow_styles = False
+            c.can_apply_styles = False
         #if the preference is set and we're not at a cname
         elif not c.user.pref_show_stylesheets and not c.cname:
-            c.allow_styles = False
+            c.can_apply_styles = False
         #if the site has a cname, but we're not using it
         elif c.site.domain and c.site.css_on_cname and not c.cname:
-            c.allow_styles = False
+            c.can_apply_styles = False
 
     def check_modified(self, thing, action,
                        private=True, max_age=0, must_revalidate=True):
@@ -924,18 +928,9 @@ class RedditController(MinimalController):
             abort(304, 'not modified')
 
     def search_fail(self, exception):
-        from r2.lib.contrib.pysolr import SolrError
-        from r2.lib.indextank import IndextankException
-        if isinstance(exception, SolrError):
-            errmsg = "SolrError: %r" % exception
-
-            if (str(exception) == 'None'):
-                # Production error logs only get non-None errors
-                g.log.debug(errmsg)
-            else:
-                g.log.error(errmsg)
-        elif isinstance(exception, (IndextankException, socket.error)):
-            g.log.error("IndexTank Error: %s" % repr(exception))
+        from r2.lib.search import SearchException
+        if isinstance(exception, SearchException + (socket.error,)):
+            g.log.error("Search Error: %s" % repr(exception))
 
         errpage = pages.RedditError(_("search failed"),
                                     strings.search_failed)

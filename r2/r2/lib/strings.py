@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 """
 Module for maintaining long or commonly used translatable strings,
 removing the need to pollute the code with lots of extra _ and
@@ -27,10 +28,12 @@ random strings which can be different in each language, though the
 hooks to the UI are the same.
 """
 
-import r2.lib.helpers as h
-from pylons import g
-from pylons.i18n import _, ungettext
-import random, locale
+from pylons import g, c
+from pylons.i18n import _, ungettext, get_lang
+import random
+import babel.numbers
+
+from r2.lib.translation import set_lang
 
 __all__ = ['StringHandler', 'strings', 'PluralManager', 'plurals',
            'Score', 'rand_strings']
@@ -62,7 +65,7 @@ string_dict = dict(
     # this is for Japanese which treats people counts differently
     person_label = _("<span class='number'>%(num)s</span>&#32;<span class='word'>%(persons)s</span>"),
 
-    firsttext = _("reddit is a source for what's new and popular online. vote on links that you like or dislike and help decide what's popular, or submit your own!"),
+    firsttext = _("reddit is a source for what's new and popular online. vote on links that you like or dislike and help decide what's popular, or submit your own! [learn more &rsaquo;](/about)"),
 
     already_submitted = _("that link has already been submitted, but you can try to [submit it again](%s)."),
 
@@ -74,6 +77,8 @@ string_dict = dict(
     cover_disclaim = _("(don't worry, it only takes a few seconds)"),
 
     oauth_login_msg = _("Log in or register to connect your reddit account with [%(app_name)s](%(app_about_url)s)."),
+
+    login_fallback_msg = _("try using our secure login form."),
 
     legal = _("I understand and agree that registration on or use of this site constitutes agreement to its %(user_agreement)s and %(privacy_policy)s."),
 
@@ -118,6 +123,7 @@ string_dict = dict(
         invalid_property = _('"%(cssprop)s" is not a valid CSS property'),
         invalid_val_for_prop = _('"%(cssvalue)s" is not a valid value for CSS property "%(cssprop)s"'),
         too_big = _('too big. keep it under %(max_size)dkb'),
+        max_size = _('max size: %(max_size)dkB'),
         syntax_error = _('syntax error: "%(syntaxerror)s"'),
         no_imports = _('@imports are not allowed'),
         invalid_property_list = _('invalid CSS property list "%(proplist)s"'),
@@ -162,7 +168,7 @@ string_dict = dict(
     gold_summary_signed_gift = _("You're about to give %(amount)s of reddit gold to %(recipient)s, who will be told that it came from you."),
     gold_summary_anonymous_gift = _("You're about to give %(amount)s of reddit gold to %(recipient)s. It will be an anonymous gift."),
     unvotable_message = _("sorry, this has been archived and can no longer be voted on"),
-    account_activity_blurb = _("This page shows a history of recent activity on your account. If you notice unusual activity, you should change your password immediately. Location information is guessed from your computer's IP address and may be wildly wrong, especially for visits from mobile devices."),
+    account_activity_blurb = _("This page shows a history of recent activity on your account. If you notice unusual activity, you should change your password immediately. Location information is guessed from your computer's IP address and may be wildly wrong, especially for visits from mobile devices. Note: due to a bug, private-use addresses (starting with 10.) sometimes show up erroneously in this list after regular use of the site."),
     your_current_ip_is = _("You are currently accessing reddit from this IP address: %(address)s."),
 
 )
@@ -276,7 +282,7 @@ class Score(object):
     @staticmethod
     def _people(x, label):
         return strings.person_label % \
-            dict(num = locale.format("%d", x, True),
+            dict(num = babel.numbers.format_number(x, c.locale),
                  persons = label(x))
 
     @staticmethod
@@ -305,11 +311,11 @@ def fallback_trans(x):
     translation that we've hopefully already provided"""
     t = _(x)
     if t == x:
-        l = h.get_lang()
-        h.set_lang(g.lang, graceful_fail = True)
+        l = get_lang()
+        set_lang(g.lang, graceful_fail = True)
         t = _(x)
         if l and l[0] != g.lang:
-            h.set_lang(l[0])
+            set_lang(l[0])
     return t
 
 class RandomString(object):

@@ -11,19 +11,20 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
+from r2.config.extensions import get_api_subtype
 from r2.lib.utils import tup
 from r2.lib.captcha import get_iden
 from r2.lib.wrapped import Wrapped, StringTemplate
 from r2.lib.filters import websafe_json, spaceCompress
-from r2.lib.jsontemplates import get_api_subtype
 from r2.lib.base import BaseController
 from r2.lib.pages.things import wrap_links
 from r2.models import IDBuilder, Listing

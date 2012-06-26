@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from pylons import g
 from itertools import chain
 from r2.lib.utils import tup, to36
@@ -26,7 +27,7 @@ from r2.lib.db.sorts import epoch_seconds
 from r2.lib.cache import sgm
 from r2.models.link import Link
 
-MAX_ITERATIONS = 25000
+MAX_ITERATIONS = 50000
 
 def comments_key(link_id):
     return 'comments_' + str(link_id)
@@ -479,9 +480,8 @@ def subreddit_messages(sr, update = False):
         g.permacache.set(key, trees)
     return trees
 
-def moderator_messages(user):
+def moderator_messages(sr_ids):
     from r2.models import Subreddit
-    sr_ids = Subreddit.reverse_moderator_ids(user)
 
     def multi_load_tree(sr_ids):
         srs = Subreddit._byID(sr_ids, return_dict = False)

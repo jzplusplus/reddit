@@ -11,14 +11,15 @@
 # WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
 # the specific language governing rights and limitations under the License.
 #
-# The Original Code is Reddit.
+# The Original Code is reddit.
 #
-# The Original Developer is the Initial Developer.  The Initial Developer of the
-# Original Code is CondeNet, Inc.
+# The Original Developer is the Initial Developer.  The Initial Developer of
+# the Original Code is reddit Inc.
 #
-# All portions of the code written by CondeNet are Copyright (c) 2006-2010
-# CondeNet, Inc. All Rights Reserved.
-################################################################################
+# All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
+# Inc. All Rights Reserved.
+###############################################################################
+
 from r2.lib.utils import Storage, tup
 from pylons.i18n import _
 from copy import copy
@@ -62,6 +63,7 @@ error_list = dict((
         ('BAD_SR_NAME', _('that name isn\'t going to work')),
         ('RATELIMIT', _('you are doing that too much. try again in %(time)s.')),
         ('QUOTA_FILLED', _("You've submitted too many links recently. Please try again in an hour.")),
+        ('SUBREDDIT_RATELIMIT', _("you are doing that too much. try again later.")),
         ('EXPIRED', _('your session has expired')),
         ('DRACONIAN', _('you must accept the terms first')),
         ('BANNED_IP', "IP banned"),
@@ -94,6 +96,7 @@ error_list = dict((
         ('OAUTH2_ACCESS_DENIED', _('access denied by the user')),
         ('CONFIRM', _("please confirm the form")),
         ('NO_API', _('cannot perform this action via the API')),
+        ('DOMAIN_BANNED', _('%(domain)s is not allowed on reddit: %(reason)s')),
     ))
 errors = Storage([(e, e) for e in error_list.keys()])
 
