@@ -1416,6 +1416,9 @@ class ApiController(RedditController):
                            "css_on_cname", "header_title", 
                            'allow_top', 'public_description'))
 
+        #Make sure subreddit never gets non-private
+        kw['type']='private'
+
         #if a user is banned, return rate-limit errors
         if c.user._spam:
             time = timeuntil(datetime.now(g.tz) + timedelta(seconds=600))
