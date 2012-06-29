@@ -1204,6 +1204,7 @@ def votes_visible(user):
     """
     return ((c.user_is_loggedin and c.user.name == user.name) or
             user.pref_public_votes or False)
+            #Disallow admins from seeing user votes
             #c.user_is_admin)
 
 

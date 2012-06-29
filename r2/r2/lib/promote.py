@@ -72,6 +72,12 @@ def promo_edit_url(l):
 def pay_url(l, indx):
     return "%spromoted/pay/%s/%d" % (g.payment_domain, l._id36, indx)
 
+def view_live_url(l, srname):
+    url = get_domain(cname=False, subreddit=False)
+    if srname:
+        url += '/r/%s' % srname
+    return 'http://%s/?ad=%s' % (url, l._fullname)
+
 # booleans
 
 def is_promo(link):
@@ -104,6 +110,22 @@ def is_valid_campaign(link, campaign_id):
         return True
     except NotFound:
         return False
+
+def is_live_on_sr(link, srname):
+
+    campaigns = link.campaigns
+    if not campaigns:
+        return False
+
+    live = scheduled_campaigns_by_link(link)
+    srname = srname.lower()
+    srname = srname if srname != DefaultSR.name.lower() else ''
+
+    for index in live:
+        campaign = campaigns.get(index)
+        if campaign and campaign[CAMPAIGN.sr].lower() == srname:
+            return True
+    return False
 
 # no references to promote_status below this function, pls
 def set_status(l, status, onchange = None):
@@ -233,12 +255,15 @@ class RenderableCampaign():
                                   time = ungettext("day", "days", ndays))
         self.bid = "%.2f" % bid
         self.sr = sr
+        live = is_live_on_sr(link, sr)
 
         self.status = dict(paid = bool(transaction),
                            complete = False,
                            free = (trans_id < 0),
                            pay_url = pay_url(link, indx),
-                           sponsor = c.user_is_sponsor)
+                           view_live_url = view_live_url(link, sr),
+                           sponsor = c.user_is_sponsor,
+                           live = live)
         if transaction:
             if transaction.is_void():
                 self.status['paid'] = False
@@ -258,8 +283,7 @@ def editable_add_props(l):
         l = Wrapped(l)
 
     l.bids = get_transactions(l)
-    l.campaigns = dict((indx, RenderableCampaign(l, indx,
-                                                 campaign, l.bids.get(indx))) 
+    l.campaigns = dict((indx, RenderableCampaign(l, indx, campaign, l.bids.get(indx))) 
                        for indx, campaign in
                        getattr(l, "campaigns", {}).iteritems())
 
@@ -521,22 +545,6 @@ def promo_datetime_now(offset = None):
         now += timedelta(offset)
     return now
 
-
-
-def get_scheduled_campaign(link, offset = None):
-    """
-    returns the indices of the campaigns that (datewise) could be active.
-    """
-    now = promo_datetime_now(offset = offset)
-    active = []
-    campaigns = getattr(link, "campaigns", {})
-    for indx in campaigns:
-        sd, ed, bid, sr, trans_id = campaigns[indx]
-        if sd <= now and ed >= now:
-            active.append(indx)
-    return active
-
-
 def accept_promotion(link):
     """
     Accepting is campaign agnostic.  Accepting the ad just means that
@@ -585,54 +593,73 @@ def unapprove_promotion(link):
     set_status(link, STATUS.unseen)
     links, weghts = get_live_promotions()
 
-def accepted_iter(func, offset = 0):
-    now = promo_datetime_now(offset = offset)
+def accepted_campaigns(offset=0):
+    now = promo_datetime_now(offset=offset)
     campaigns = PromotionWeights.get_campaigns(now)
-    # load the links that have campaigns coming up
     links = Link._by_fullname(set(x.thing_name for x in campaigns),
-                              data = True,return_dict = True)
+                              data=True, return_dict=True)
+
     for x in campaigns:
         l = links[x.thing_name]
-        if is_accepted(l):
-            # get the campaign of interest from the link
-            camp = getattr(l, "campaigns", {}).get(x.promo_idx)
-            # the transaction id is the last of the campaign tuple
-            if camp and camp[CAMPAIGN.trans_id]:
-                func(l, camp, x.promo_idx, x.weight)
+        if not is_accepted(l):
+            continue
+        camp = getattr(l, "campaigns", {}).get(x.promo_idx)
+        if not camp or not camp[CAMPAIGN.trans_id]:
+            continue
+        yield (l, x.promo_idx, camp)
 
+def get_scheduled(offset=0):
+    by_sr = {}
+    for l, index, camp in accepted_campaigns(offset=offset):
+        sd, ed, bid, sr, trans_id = camp
+        if authorize.is_charged_transaction(trans_id, index):
+            by_sr.setdefault(sr, []).append((l, bid))
+    return by_sr
 
-def charge_pending(offset = 1):
-    def _charge(l, camp, indx, weight):
+def charge_pending(offset=1):
+    for l, index, camp in accepted_campaigns(offset=offset):
         user = Account._byID(l.author_id)
         sd, ed, bid, sr, trans_id = camp
         try:
-            if (not authorize.is_charged_transaction(trans_id, indx) and
-                authorize.charge_transaction(user, trans_id, indx)):
-                # update the query queue
-                if is_promoted(l):
-                    emailer.queue_promo(l, bid, trans_id)
-                else:
-                    set_status(l, STATUS.pending,
-                               onchange = lambda: emailer.queue_promo(l, bid, trans_id) )
-                promotion_log(l, "auth charge for campaign %s, trans_id: %d" % (indx, trans_id), True)
+            if (authorize.is_charged_transaction(trans_id, index) or not
+                authorize.charge_transaction(user, trans_id, index)):
+                continue
+
+            if is_promoted(l):
+                emailer.queue_promo(l, bid, trans_id)
+            else:
+                set_status(l, STATUS.pending,
+                    onchange=lambda: emailer.queue_promo(l, bid, trans_id))
+            promotion_log(l, "auth charge for campaign %s, trans_id: %d" % (index, trans_id), True)
         except:
-            print "Error on %s, campaign %s" % (l, indx)
-    accepted_iter(_charge, offset = offset)
+            print "Error on %s, campaign %s" % (l, index)
 
+def scheduled_campaigns_by_link(l, date=None):
+    # A promotion/campaign is scheduled/live if it's in
+    # PromotionWeights.get_campaigns(now) and
+    # authorize.is_charged_transaction()
 
-def get_scheduled(offset = 0):
-    """
-    gets a dictionary of sr -> list of (link, weight) for promotions
-    that should be live as of the day which is offset days from today.
-    """
-    by_sr = {}
-    def _promote(l, camp, indx, weight):
-        sd, ed, bid, sr, trans_id = camp
-        if authorize.is_charged_transaction(trans_id, indx):
-            by_sr.setdefault(sr, []).append((l, weight))
-    accepted_iter(_promote, offset = offset)
-    return by_sr
+    date = date or promo_datetime_now()
 
+    if not is_accepted(l):
+        return []
+    if not l.campaigns:
+        return []
+
+    scheduled = PromotionWeights.get_campaigns(date)
+    campaigns = [c.promo_idx for c in scheduled if c.thing_name == l._fullname]
+
+    # Check authorize
+    accepted = []
+    for index in campaigns:
+        if not index in l.campaigns:
+            continue
+
+        sd, ed, bid, sr, trans_id = l.campaigns[index]
+        if authorize.is_charged_transaction(trans_id, index):
+            accepted.append(index)
+
+    return accepted
 
 def get_traffic_weights(srnames):
     from r2.lib import traffic
