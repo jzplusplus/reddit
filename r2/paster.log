@@ -1,0 +1,22 @@
+reddit app reddit:9263 started 721d7e7 at 2012-06-30 03:10:11.236638
+ERROR:reddit:reddit app reddit:9263 started 721d7e7 at 2012-06-30 03:10:11.236638
+Starting server in PID 9263.
+serving on 0.0.0.0:8001 view at http://127.0.0.1:8001
+Used inorganic links
+DEBUG:reddit:Used inorganic links
+rate-limiting rate_register_ from ['ip127.0.0.1']
+DEBUG:reddit:rate-limiting rate_register_ from ['ip127.0.0.1']
+rate-limiting rate_register_ from ['ip127.0.0.1']
+DEBUG:reddit:rate-limiting rate_register_ from ['ip127.0.0.1']
+rate-limiting rate_register_ from ['ip127.0.0.1']
+DEBUG:reddit:rate-limiting rate_register_ from ['ip127.0.0.1']
+reddit app reddit:9481 started 721d7e7 at 2012-06-30 03:13:12.726072
+ERROR:reddit:reddit app reddit:9481 started 721d7e7 at 2012-06-30 03:13:12.726072
+Starting server in PID 9481.
+serving on 0.0.0.0:8001 view at http://127.0.0.1:8001
+Updating last visit for testAccount2 from None to 2012-06-30 01:14:10.952959+00:00
+DEBUG:reddit:Updating last visit for testAccount2 from None to 2012-06-30 01:14:10.952959+00:00
+Used inorganic links
+DEBUG:reddit:Used inorganic links
+Used inorganic links
+DEBUG:reddit:Used inorganic links

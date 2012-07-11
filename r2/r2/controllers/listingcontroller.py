@@ -310,7 +310,7 @@ class HotController(FixListing, ListingController):
                 organic.update_pos(pos+1)
                 return s
 
-   def query(self):
+    def query(self):
         #no need to worry when working from the cache
         if g.use_query_cache or isinstance(c.site, DefaultSR):
             self.fix_listing = False

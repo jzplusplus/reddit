@@ -263,7 +263,7 @@ def set_subreddit():
     if not sr_name:
         #check for cnames
        cname = request.environ.get('legacy-cname')
-        if cname:
+       if cname:
             sr = Subreddit._by_domain(cname) or Frontpage
             domain = g.domain
             if g.domain_prefix:

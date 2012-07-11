@@ -491,7 +491,7 @@ def db2py(val, kind):
 
 #TODO i don't need type_id
 def set_data(table, type_id, thing_id, **vals):
-   transactions.add_engine(table.bind)
+    transactions.add_engine(table.bind)
 
     u = table.update(sa.and_(table.c.thing_id == thing_id,
                              table.c.key == sa.bindparam('_key')))
@@ -500,7 +500,7 @@ def set_data(table, type_id, thing_id, **vals):
     for key, val in vals.iteritems():
         val, kind = py2db(val, return_kind=True)
 
-       uresult = u.execute(_key = key, value = val, kind = kind)
+        uresult = u.execute(_key = key, value = val, kind = kind)
         if not uresult.rowcount:
             inserts.append({'key':key, 'value':val, 'kind': kind})
 

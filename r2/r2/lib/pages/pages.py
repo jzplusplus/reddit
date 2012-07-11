@@ -297,7 +297,8 @@ class Reddit(Templated):
                     kwargs["subtitles"] = [strings.submit_box_restricted_text]
             ps.append(SideBox(**kwargs))
 
-        if self.create_reddit_box and c.user_is_loggedin:
+        if self.create_reddit_box and c.user_is_loggedin and \
+           c.user.name in g.admins:
             delta = datetime.datetime.now(g.tz) - c.user._date
             if delta.days >= g.min_membership_create_community:
                 ps.append(SideBox(_('Create your own community'),

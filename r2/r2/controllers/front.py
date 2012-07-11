@@ -357,6 +357,11 @@ class FrontController(RedditController):
     @validate(VUser(),
               name = nop('name'))
     def GET_newreddit(self, name):
+        #Check if user is admin, even if admin mode is off
+        #Only admins can create subreddits
+        if not c.user.name in g.admins:
+            return self.abort404()
+
         """Create a community form"""
         title = _('create a reddit')
         content=CreateSubreddit(name = name or '')

@@ -99,7 +99,7 @@
       <table>
       ${utils.radio_type('type', "private", _("private"),
                          _("only approved members can view and submit"),
-                         (thing.site and thing.site.type=='private'))}
+                         (not thing.site or thing.site.type=='private'))}
       </table>
     </div>
   </%utils:line_field>
