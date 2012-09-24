@@ -234,8 +234,11 @@ class DataThing(object):
     def _commit(self, keys=None):
         if not self._created:
             self._create()
+            just_created = True
+        else:
+            just_created = False
 
-        with g.make_lock('commit_' + self._fullname):
+        with g.make_lock("thing_commit", 'commit_' + self._fullname):
             if not self._sync_latest():
                 #sync'd and we have nothing to do now, but we still cache anyway
                 self._cache_myself()
@@ -257,7 +260,10 @@ class DataThing(object):
                     data_props[k] = v
 
             if data_props:
-                self._set_data(self._type_id, self._id, **data_props)
+                self._set_data(self._type_id,
+                               self._id,
+                               just_created,
+                               **data_props)
 
             if thing_props:
                 self._set_props(self._type_id, self._id, **thing_props)
@@ -321,7 +327,7 @@ class DataThing(object):
                        (prop, self, self._int_props, self._data_int_props))
                 raise ValueError, msg
 
-        with g.make_lock('commit_' + self._fullname):
+        with g.make_lock("thing_commit", 'commit_' + self._fullname):
             self._sync_latest()
             old_val = getattr(self, prop)
             if self._defaults.has_key(prop) and self._defaults[prop] == old_val:
@@ -996,7 +1002,7 @@ class Query(object):
             # it's not in the cache, and we have the power to
             # update it, which we should do in a lock to prevent
             # concurrent requests for the same data
-            with g.make_lock("lock_%s" % self._iden()):
+            with g.make_lock("thing_query", "lock_%s" % self._iden()):
                 # see if it was set while we were waiting for our
                 # lock
                 names = cache.get(self._iden(), allow_local = False) \

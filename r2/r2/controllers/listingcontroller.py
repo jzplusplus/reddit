@@ -20,6 +20,7 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+from oauth2 import OAuth2ResourceController, require_oauth2_scope
 from reddit_base import RedditController, base_listing, organic_pos
 from validator import *
 
@@ -44,7 +45,6 @@ from r2.lib.promote import randomized_promotion_list, get_promote_srid
 import socket
 
 from api_docs import api_doc, api_section
-from admin import admin_profile_query
 
 from pylons.i18n import _
 from pylons import Response
@@ -219,6 +219,7 @@ class HotController(FixListing, ListingController):
     where = 'hot'
 
     def spotlight(self):
+        campaigns_by_link = {}
         if (self.requested_ad or
             not isinstance(c.site, DefaultSR) and c.user.pref_show_sponsors):
 
@@ -243,13 +244,22 @@ class HotController(FixListing, ListingController):
                     return _("requested campaign not eligible for display")
             else:
                 # no organic box on a hot page, then show a random promoted link
-                link_ids = randomized_promotion_list(c.user, c.site)
+                promo_tuples = randomized_promotion_list(c.user, c.site)
+                link_ids, camp_ids = zip(*promo_tuples) if promo_tuples else ([],[])
+
+                # save campaign-to-link mapping so campaign can be added to 
+                # link data later (for tracking.) Gotcha: assumes each link 
+                # appears for only campaign
+                campaigns_by_link = dict(promo_tuples)
 
             if link_ids:
                 res = wrap_links(link_ids, wrapper=self.builder_wrapper,
                                  num=1, keep_fn=lambda x: x.fresh, skip=True)
                 res.parent_name = "promoted"
                 if res.things:
+                    # store campaign id for tracking
+                    for thing in res.things:
+                        thing.campaign = campaigns_by_link.get(thing._fullname, None)
                     return res
 
         elif (isinstance(c.site, DefaultSR)
@@ -257,15 +267,25 @@ class HotController(FixListing, ListingController):
                  or (c.user_is_loggedin and c.user.pref_organic))):
 
             spotlight_links = organic.organic_links(c.user)
+            
             pos = organic_pos()
 
             if not spotlight_links:
                 pos = 0
             elif pos != 0:
                 pos = pos % len(spotlight_links)
+            spotlight_keep_fn = organic.keep_fresh_links
+            num_links = organic.organic_length
 
+            # If prefs allow it, mix in promoted links and sr discovery content
             if c.user.pref_show_sponsors or not c.user.gold:
-                spotlight_links, pos = promote.insert_promoted(spotlight_links, pos)
+                if g.live_config['sr_discovery_links']:
+                    spotlight_links.extend(g.live_config['sr_discovery_links'])
+                    random.shuffle(spotlight_links)
+                    spotlight_keep_fn = lambda l: promote.is_promo(l) or organic.keep_fresh_links(l)
+                    num_links = len(spotlight_links)
+                spotlight_links, pos, campaigns_by_link = promote.insert_promoted(spotlight_links,
+                                                                                  pos) 
 
             # Need to do this again, because if there was a duplicate removed,
             # pos might be pointing outside the list.
@@ -288,9 +308,9 @@ class HotController(FixListing, ListingController):
 
             b = IDBuilder(disp_links,
                           wrap = self.builder_wrapper,
-                          num = organic.organic_length,
-                          skip = True,
-                          keep_fn = organic.keep_fresh_links)
+                          num = num_links,
+                          keep_fn = spotlight_keep_fn,
+                          skip = True)
 
             try:
                 vislink = spotlight_links[pos]
@@ -299,15 +319,29 @@ class HotController(FixListing, ListingController):
                 g.log.error("pos = %d" % pos)
                 raise
 
-            s = SpotlightListing(b, spotlight_links = spotlight_links,
-                                 visible_link = vislink,
+            s = SpotlightListing(b, spotlight_items = spotlight_links,
+                                 visible_item = vislink,
                                  max_num = self.listing_obj.max_num,
                                  max_score = self.listing_obj.max_score).listing()
+
+            has_subscribed = c.user.has_subscribed
+            promo_visible = promote.is_promo(s.lookup[vislink])
+            if not promo_visible:
+                prob = g.live_config['spotlight_interest_sub_p'
+                                     if has_subscribed else
+                                     'spotlight_interest_nosub_p']
+                if random.random() < prob:
+                    bar = InterestBar(has_subscribed)
+                    s.spotlight_items.insert(pos, bar)
+                    s.visible_item = bar
 
             if len(s.things) > 0:
                 # only pass through a listing if the links made it
                 # through our builder
                 organic.update_pos(pos+1)
+                # add campaign id to promoted links for tracking
+                for thing in s.things:
+                    thing.campaign = campaigns_by_link.get(thing._fullname, None)
                 return s
 
     def query(self):
@@ -426,18 +460,14 @@ class BrowseController(ListingController):
     def query(self):
         return c.site.get_links(self.sort, self.time)
 
-    # TODO: this is a hack with sort.
-    @validate(sort = VOneOf('sort', ('top', 'controversial')),
-              t = VMenu('sort', ControversyTimeMenu))
+    @validate(t = VMenu('sort', ControversyTimeMenu))
     def POST_listing(self, sort, t, **env):
         # VMenu validator will save the value of time before we reach this
         # point. Now just redirect to GET mode.
         return self.redirect(
             request.fullpath + query_string(dict(sort=sort, t=t)))
 
-    # TODO: this is a hack with sort.
-    @validate(sort = VOneOf('sort', ('top', 'controversial')),
-              t = VMenu('sort', ControversyTimeMenu))
+    @validate(t = VMenu('sort', ControversyTimeMenu))
     @listing_api_doc(uri='/{sort}', uri_variants=['/top', '/controversial'])
     def GET_listing(self, sort, t, **env):
         self.sort = sort
@@ -445,6 +475,10 @@ class BrowseController(ListingController):
             self.title_text = _('top scoring links')
         elif sort == 'controversial':
             self.title_text = _('most controversial links')
+        else:
+            # 'sort' is forced to top/controversial by routing.py,
+            # but in case something has gone wrong...
+            abort(404)
         self.time = t
         return ListingController.GET_listing(self, **env)
 
@@ -585,9 +619,6 @@ class UserController(ListingController):
 
         elif c.user_is_sponsor and self.where == 'promoted':
             q = promote.get_all_links(self.vuser._id)
-
-        elif c.user_is_admin:
-            q = admin_profile_query(self.vuser, self.where, desc('_date'))
 
         if q is None:
             return self.abort404()
@@ -894,6 +925,9 @@ class RedditsController(ListingController):
             if not c.over18:
                 reddits._filter(Subreddit.c.over_18 == False)
 
+        if self.where == 'popular':
+            self.render_params = {"show_interestbar": True}
+
         return reddits
 
     @listing_api_doc(section=api_section.subreddits,
@@ -903,8 +937,12 @@ class RedditsController(ListingController):
         self.where = where
         return ListingController.GET_listing(self, **env)
 
-class MyredditsController(ListingController):
+class MyredditsController(ListingController, OAuth2ResourceController):
     render_cls = MySubredditsPage
+
+    def pre(self):
+        ListingController.pre(self)
+        self.check_for_bearer_token()
 
     @property
     def menus(self):
@@ -955,6 +993,7 @@ class MyredditsController(ListingController):
 
         return ListingController.build_listing(self, after=after, **kwargs)
 
+    @require_oauth2_scope("myreddits")
     @validate(VUser())
     @listing_api_doc(section=api_section.subreddits,
                      uri='/reddits/mine/{where}',

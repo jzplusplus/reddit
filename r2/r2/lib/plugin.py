@@ -23,12 +23,23 @@
 import sys
 import os.path
 import pkg_resources
+from collections import OrderedDict
+
 from pylons import config
 
 
 class Plugin(object):
     js = {}
     config = {}
+    live_config = {}
+    needs_static_build = False
+
+    def __init__(self, entry_point):
+        self.entry_point = entry_point
+
+    @property
+    def name(self):
+        return self.entry_point.name
 
     @property
     def path(self):
@@ -36,9 +47,9 @@ class Plugin(object):
         return os.path.dirname(module.__file__)
 
     @property
-    def template_dirs(self):
+    def template_dir(self):
         """Add module/templates/ as a template directory."""
-        return [os.path.join(self.path, 'templates')]
+        return os.path.join(self.path, 'templates')
 
     @property
     def static_dir(self):
@@ -58,6 +69,9 @@ class Plugin(object):
             else:
                 module_registry[name].extend(module)
 
+    def declare_queues(self, queues):
+        pass
+
     def add_routes(self, mc):
         pass
 
@@ -66,14 +80,34 @@ class Plugin(object):
 
 
 class PluginLoader(object):
-    def __init__(self):
-        self.plugins = {}
+    def __init__(self, plugin_names=None):
+        if plugin_names is None:
+            entry_points = self.available_plugins()
+        else:
+            entry_points = []
+            for name in plugin_names:
+                try:
+                    entry_point = self.available_plugins(name).next()
+                except StopIteration:
+                    print >> sys.stderr, ("Unable to locate plugin "
+                                          "%s. Skipping." % name)
+                    continue
+                else:
+                    entry_points.append(entry_point)
+
+        self.plugins = OrderedDict()
+        for entry_point in entry_points:
+            plugin_cls = entry_point.load()
+            self.plugins[entry_point.name] = plugin_cls(entry_point)
 
     def __len__(self):
         return len(self.plugins)
 
     def __iter__(self):
         return self.plugins.itervalues()
+
+    def __reversed__(self):
+        return reversed(self.plugins.values())
 
     def __getitem__(self, key):
         return self.plugins[key]
@@ -82,30 +116,23 @@ class PluginLoader(object):
     def available_plugins(name=None):
         return pkg_resources.iter_entry_points('r2.plugin', name)
 
-    @staticmethod
-    def plugin_path(plugin):
-        if isinstance(plugin, str):
-            try:
-                plugin = pkg_resources.iter_entry_points("r2.plugin", name).next()
-            except StopIteration:
-                return None
-        return os.path.join(plugin.dist.location, plugin.module_name)
+    def declare_queues(self, queues):
+        for plugin in self:
+            plugin.declare_queues(queues)
 
-    def load_plugins(self, plugin_names):
+    def load_plugins(self):
         g = config['pylons.g']
-        for name in plugin_names:
-            try:
-                entry_point = self.available_plugins(name).next()
-            except StopIteration:
-                g.log.warning('Unable to locate plugin "%s". Skipping.' % name)
-                continue
-            plugin_cls = entry_point.load()
-            plugin = self.plugins[name] = plugin_cls()
+        for plugin in self:
+            # Record plugin version
+            entry = plugin.entry_point
+            git_dir = os.path.join(entry.dist.location, '.git')
+            g.record_repo_version(entry.name, git_dir)
+
+            # Load plugin
             g.config.add_spec(plugin.config)
-            config['pylons.paths']['templates'].extend(plugin.template_dirs)
+            config['pylons.paths']['templates'].insert(0, plugin.template_dir)
             plugin.add_js()
             plugin.on_load()
-        return self
 
     def load_controllers(self):
         for plugin in self:

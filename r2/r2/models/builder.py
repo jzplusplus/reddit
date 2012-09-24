@@ -29,15 +29,18 @@ from pylons import g
 from pylons.i18n import _
 
 import subreddit
+import datetime
 
 from r2.lib.comment_tree import moderator_messages, sr_conversation, conversation
 from r2.lib.comment_tree import user_messages, subreddit_messages
 
 from r2.lib.wrapped import Wrapped
 from r2.lib import utils
-from r2.lib.db import operators
+from r2.lib.db import operators, tdb_cassandra
 from r2.lib.filters import _force_unicode
 from copy import deepcopy
+
+from r2.models.wiki import WIKI_RECENT_DAYS
 
 import time
 from admintools import compute_votes, admintools, ip_span
@@ -90,7 +93,11 @@ class Builder(object):
                               if sr.can_ban(user))
 
         #get likes/dislikes
-        likes = queries.get_likes(user, items)
+        try:
+            likes = queries.get_likes(user, items)
+        except tdb_cassandra.TRANSIENT_EXCEPTIONS as e:
+            g.log.warning("Cassandra vote lookup failed: %r", e)
+            likes = {}
         uid = user._id if user else None
 
         types = {}
@@ -388,8 +395,8 @@ class QueryBuilder(Builder):
                 if not (self.must_skip(i) or self.skip and not self.keep_item(i)):
                     items.append(i)
                     num_have += 1
+                    count = count - 1 if self.reverse else count + 1
                     if self.wrap:
-                        count = count - 1 if self.reverse else count + 1
                         i.num = count
                 last_item = i
         
@@ -415,6 +422,10 @@ class QueryBuilder(Builder):
                 after_count)
 
 class IDBuilder(QueryBuilder):
+    def thing_lookup(self, names):
+        return Thing._by_fullname(names, data=True, return_dict=False,
+                                  stale=self.stale)
+
     def init_query(self):
         names = list(tup(self.query))
 
@@ -457,8 +468,38 @@ class IDBuilder(QueryBuilder):
             done = True
 
         self.names, new_names = names[slice_size:], names[:slice_size]
-        new_items = Thing._by_fullname(new_names, data = True, return_dict=False, stale=self.stale)
+        new_items = self.thing_lookup(new_names)
         return done, new_items
+
+
+class SimpleBuilder(IDBuilder):
+    def thing_lookup(self, names):
+        return names
+
+    def init_query(self):
+        items = list(tup(self.query))
+
+        if self.reverse:
+            items.reverse()
+
+        if self.after:
+            for i, item in enumerate(items):
+                if item._id == self.after:
+                    self.names = items[i + 1:]
+                    break
+            else:
+                self.names = ()
+        else:
+            self.names = items
+
+    def get_items(self):
+        items, prev, next, bcount, acount = IDBuilder.get_items(self)
+        if prev:
+            prev = prev._id
+        if next:
+            next = next._id
+        return (items, prev, next, bcount, acount)
+
 
 class SearchBuilder(IDBuilder):
     def __init__(self, query, wrap=Wrapped, keep_fn=None, skip=False,
@@ -470,9 +511,9 @@ class SearchBuilder(IDBuilder):
 
         self.start_time = time.time()
 
-        search = self.query.run()
-        names = list(search.docs)
-        self.total_num = search.hits
+        self.results = self.query.run()
+        names = list(self.results.docs)
+        self.total_num = self.results.hits
 
         after = self.after._fullname if self.after else None
 
@@ -492,6 +533,29 @@ class SearchBuilder(IDBuilder):
             return False
         else:
             return True
+
+class WikiRevisionBuilder(QueryBuilder):
+    def wrap_items(self, items):
+        types = {}
+        wrapped = []
+        for item in items:
+            w = self.wrap(item)
+            types.setdefault(w.render_class, []).append(w)
+            wrapped.append(w)
+        
+        user = c.user
+        for cls in types.keys():
+            cls.add_props(user, types[cls])
+
+        return wrapped
+    
+    def keep_item(self, item):
+        return not item.is_hidden
+
+class WikiRecentRevisionBuilder(WikiRevisionBuilder):
+    def must_skip(self, item):
+        return (datetime.datetime.now(g.tz) - item.date).days >= WIKI_RECENT_DAYS
+        
 
 def empty_listing(*things):
     parent_name = None

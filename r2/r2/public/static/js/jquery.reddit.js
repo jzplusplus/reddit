@@ -154,6 +154,7 @@ function handleResponse(action) {
         }
     };
 };
+$.handleResponse = handleResponse;
 
 var api_loc = '/api/';
 $.request = function(op, parameters, worker_in, block, type, 
@@ -666,8 +667,10 @@ $.apply_stylesheet = function(cssText) {
          * that has the old stylesheet, and delete it. Then we add a
          * <style> with the new one */
         $("head").children('*[title="' + sheet_title + '"]').remove();
-        $("head").append("<style type='text/css' media='screen' title='" + 
-                         sheet_title + "'>" + cssText + "</style>");
+        var stylesheet = $('<style type="text/css" media="screen"></style>')
+            .attr('title', sheet_title)
+            .text(cssText)
+            .appendTo('head')
   }
     
 };

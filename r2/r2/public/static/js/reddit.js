@@ -105,8 +105,8 @@ function form_error(form) {
     }
 }
 
-function simple_post_form(form, where, fields, block) {
-    $.request(where, get_form_fields(form, fields), null, block, 
+function simple_post_form(form, where, fields, block, callback) {
+    $.request(where, get_form_fields(form, fields), callback, block, 
               "json", false, form_error(form));
     return false;
 };
@@ -121,6 +121,12 @@ function post_pseudo_form(form, where, block) {
     $.request(where, get_form_fields(form, {}, filter_func), null, block,
               "json", false, form_error(form));
     return false;
+}
+
+function post_multipart_form(form, where) {
+    $(form).find(".error").not(".status").hide();
+    $(form).find(".status").html(reddit.status_msg.submitting).show();
+    return true;
 }
 
 function emptyInput(elem, msg) {
@@ -151,7 +157,7 @@ function deleteRow(elem) {
 
 /* general things */
 
-function change_state(elem, op, callback, keep) {
+function change_state(elem, op, callback, keep, post_callback) {
     var form = $(elem).parents("form");
     /* look to see if the form has an id specified */
     var id = form.find('input[name="id"]');
@@ -160,7 +166,7 @@ function change_state(elem, op, callback, keep) {
     else /* fallback on the parent thing */
         id = $(elem).thing_id();
 
-    simple_post_form(form, op, {id: id});
+    simple_post_form(form, op, {id: id}, undefined, post_callback);
     /* call the callback first before we mangle anything */
     if (callback) {
         callback(form.length ? form : elem, op);
@@ -215,8 +221,10 @@ function click_thing(elem) {
 }
 
 function hide_thing(elem) {
-    $(elem).thing().fadeOut(function(elem) { 
-            $(this).toggleClass("hidden") });
+    $(elem).thing().fadeOut(function() {
+            $(this).toggleClass("hidden");
+            unexpando_child(elem);
+    });
 };
 
 function toggle_label (elem, callback, cancelback) {
@@ -228,6 +236,8 @@ function toggle_label (elem, callback, cancelback) {
 }
 
 function toggle(elem, callback, cancelback) {
+    r.analytics.breadcrumbs.storeLastClick(elem)
+
     var self = $(elem).parent().andSelf().filter(".option");
     var sibling = self.removeClass("active")
         .siblings().addClass("active").get(0); 
@@ -286,6 +296,8 @@ function get_organic(elem, next) {
         if (next_thing.length == 0)
             next_thing = thing.siblings(".thing:not(.stub)").filter(":last");
     }    
+
+    organic_help(listing, next_thing)
     thing.fadeOut('fast', function() {
             if(next_thing.length)
                 next_thing.fadeIn('fast', function() {
@@ -315,6 +327,27 @@ function get_organic(elem, next) {
                     });
 };
 
+function organic_help(listing, thing) {
+    listing = listing || $('.organic-listing')
+    thing = thing || listing.find('.thing:visible')
+
+    var help = $('#spotlight-help')
+    if (!help.length) {
+        return
+    }
+
+    help.data('HelpBubble').hide(function() {
+        help.find('.help-section').hide()
+        if (thing.hasClass('promoted')) {
+            help.find('.help-promoted').show()
+        } else if (thing.hasClass('interestbar')) {
+            help.find('.help-interestbar').show()
+        } else {
+            help.find('.help-organic').show()
+        }
+    })
+}
+
 /* links */
 
 function linkstatus(form) {
@@ -330,6 +363,7 @@ function subscribe(reddit_name) {
             }
             $.things(reddit_name).find(".entry").addClass("likes");
             $.request("subscribe", {sr: reddit_name, action: "sub"});
+            r.analytics.fireUITrackingPixel("sub", reddit_name)
         }
     };
 };
@@ -342,6 +376,7 @@ function unsubscribe(reddit_name) {
             }
             $.things(reddit_name).find(".entry").removeClass("likes");
             $.request("subscribe", {sr: reddit_name, action: "unsub"});
+            r.analytics.fireUITrackingPixel("unsub", reddit_name)
         }
     };
 };
@@ -349,7 +384,7 @@ function unsubscribe(reddit_name) {
 function friend(user_name, container_name, type) {
     return function() {
         if (reddit.logged) {
-            encoded = encodeURIComponent(reddit.referer);
+            encoded = encodeURIComponent(document.referrer);
             $.request("friend?note=" + encoded,
                       {name: user_name, container: container_name, type: type});
         }
@@ -494,9 +529,9 @@ function add_thing_id_to_cookie(id, cookie_name) {
 
     cookie.data = id + ',' + cookie.data;
 
-    if(cookie.data.length > 1000) {
-        var fullnames = cookie.data.split(',');
-        fullnames = $.uniq(fullnames, 20);
+    var fullnames = cookie.data.split(',');
+    if(fullnames.length > 5) {
+        fullnames = $.uniq(fullnames, 5);
         cookie.data = fullnames.join(',');
     }
 
@@ -1244,6 +1279,23 @@ $(function() {
         $("#shortlink-text").click(function() {
             $(this).select();
         });
+
+        organic_help()
+
+        /* ajax ynbutton */
+        function toggleThis() { return toggle(this); }
+        $("body")
+            .delegate(".ajax-yn-button", "submit",
+                      function() {
+                          var op = $(this).find('input[name="_op"]').val();
+                          post_form(this, op);
+                          return false;
+                      })
+            .delegate(".ajax-yn-button .togglebutton", "click", toggleThis)
+            .delegate(".ajax-yn-button .no", "click", toggleThis)
+            .delegate(".ajax-yn-button .yes", "click",
+                      function() { $(this).closest("form").submit(); })
+            ;
     });
 
 function show_friend(account_fullname) {

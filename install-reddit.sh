@@ -81,7 +81,7 @@ fi
 set -x
 
 # create the user if non-existent
-if ! id $REDDIT_USER > /dev/null 2>&1; then
+if ! id $REDDIT_USER &> /dev/null; then
     adduser --system $REDDIT_USER
 fi
 
@@ -149,6 +149,24 @@ haproxy
 PACKAGES
 
 ###############################################################################
+# Wait for all the services to be up
+###############################################################################
+# cassandra no longer auto-starts
+service cassandra start
+
+# check each port for connectivity
+echo "Waiting for services to be available, see source for port meanings..."
+# 11211 - memcache
+# 5432 - postgres
+# 5672 - rabbitmq
+# 9160 - cassandra
+for port in 11211 5432 5672 9160; do
+    while ! nc -vz localhost $port; do
+        sleep 1
+    done
+done
+
+###############################################################################
 # Install the reddit source repositories
 ###############################################################################
 if [ ! -d $REDDIT_HOME ]; then
@@ -169,10 +187,7 @@ fi
 ###############################################################################
 # Configure Cassandra
 ###############################################################################
-# wait a bit to make sure all the servers come up
-sleep 30
-
-if ! echo | cassandra-cli -h localhost -k reddit > /dev/null 2>&1; then
+if ! echo | cassandra-cli -h localhost -k reddit &> /dev/null; then
     echo "create keyspace reddit;" | cassandra-cli -h localhost -B
 fi
 
@@ -242,6 +257,7 @@ debug = true
 disable_ads = true
 disable_captcha = true
 disable_ratelimit = true
+disable_require_admin_otp = true
 
 page_cache_time = 0
 

@@ -20,6 +20,10 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+import os
+import base64
+import traceback
+
 from urllib import unquote_plus
 from urllib2 import urlopen
 from urlparse import urlparse, urlunparse
@@ -38,6 +42,8 @@ from pylons import g
 from pylons.i18n import ungettext, _
 from r2.lib.filters import _force_unicode, _force_utf8
 from mako.filters import url_escape
+from r2.lib.contrib import ipaddress
+from r2.lib.require import require, require_split
 import snudown
  
 from r2.lib.utils._utils import *
@@ -1030,21 +1036,23 @@ def filter_links(links, filter_spam = False, multiple = True):
     return links if multiple else links[0]
 
 def link_duplicates(article):
-    from r2.models import Link, NotFound
-
     # don't bother looking it up if the link doesn't have a URL anyway
     if getattr(article, 'is_self', False):
         return []
 
+    return url_links(article.url, exclude = article._fullname)
+
+def url_links(url, exclude=None):
+    from r2.models import Link, NotFound
+
     try:
-        links = tup(Link._by_url(article.url, None))
+        links = tup(Link._by_url(url, None))
     except NotFound:
         links = []
 
-    duplicates = [ link for link in links
-                   if link._fullname != article._fullname ]
-
-    return duplicates
+    links = [ link for link in links
+                   if link._fullname != exclude ]
+    return links
 
 class TimeoutFunctionException(Exception):
     pass
@@ -1096,15 +1104,6 @@ def make_offset_date(start_date, interval, future = True,
             return start_date + timedelta(interval)
         return start_date - timedelta(interval)
     return start_date
-
-def to_csv(table):
-    # commas and linebreaks must result in a quoted string
-    def quote_commas(x):
-        if ',' in x or '\n' in x:
-            return u'"%s"' % x.replace('"', '""')
-        return x
-    return u"\n".join(u','.join(quote_commas(y) for y in x)
-                      for x in table)
 
 def in_chunks(it, size=25):
     chunk = []
@@ -1318,6 +1317,17 @@ class Bomb(object):
     def __repr__(cls):
         raise Hell()
 
+class SimpleSillyStub(object):
+    """A simple stub object that does nothing when you call its methods."""
+    def __nonzero__(self):
+        return False
+
+    def __getattr__(self, name):
+        return self.stub
+
+    def stub(self, *args, **kwargs):
+        pass
+
 def strordict_fullname(item, key='fullname'):
     """Sometimes we migrate AMQP queues from simple strings to pickled
     dictionaries. During the migratory period there may be items in
@@ -1357,7 +1367,7 @@ def constant_time_compare(actual, expected):
     """
     Returns True if the two strings are equal, False otherwise
     
-    The time taken is dependent on the number of charaters provided
+    The time taken is dependent on the number of characters provided
     instead of the number of characters that match.
     """
     actual_len   = len(actual)
@@ -1385,3 +1395,50 @@ def extract_urls_from_markdown(md):
         url = link.get('href')
         if url:
             yield url
+
+
+def summarize_markdown(md):
+    """Get the first paragraph of some Markdown text, potentially truncated."""
+
+    first_graf, sep, rest = md.partition("\n\n")
+    return first_graf[:500]
+
+
+def find_containing_network(ip_ranges, address):
+    """Find an IP network that contains the given address."""
+    addr = ipaddress.ip_address(address)
+    for network in ip_ranges:
+        if addr in network:
+            return network
+    return None
+
+
+def is_throttled(address):
+    """Determine if an IP address is in a throttled range."""
+    return bool(find_containing_network(g.throttles, address))
+
+
+def parse_http_basic(authorization_header):
+    """Parse the username/credentials out of an HTTP Basic Auth header.
+
+    Raises RequirementException if anything is uncool.
+    """
+    auth_scheme, auth_token = require_split(authorization_header, 2)
+    require(auth_scheme.lower() == "basic")
+    try:
+        auth_data = base64.b64decode(auth_token)
+    except TypeError:
+        raise RequirementException
+    return require_split(auth_data, 2, ":")
+
+
+def simple_traceback():
+    """Generate a pared-down traceback that's human readable but small."""
+
+    stack_trace = traceback.extract_stack(limit=7)[:-2]
+    return "\n".join(":".join((os.path.basename(filename),
+                               function_name,
+                               str(line_number),
+                              ))
+                     for filename, line_number, function_name, text
+                     in stack_trace)

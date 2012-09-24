@@ -24,7 +24,7 @@
    import json
    from r2.models import FakeSubreddit
    from r2.lib.filters import spaceCompress, unsafe, safemarkdown
-   from r2.lib.template_helpers import add_sr, js_config, static
+   from r2.lib.template_helpers import add_sr, js_config, static, html_datetime
    from r2.lib.utils import cols, long_datetime, timesince
    from r2.lib.tracking import UserInfo
    from datetime import datetime
@@ -267,8 +267,41 @@ ${unsafe(txt)}
   </input>
 </%def>
 
+<%def name="ajax_upload(target, form_id)">
+  <form method="post" enctype="multipart/form-data" target="${form_id}-iframe"
+        id="${form_id}" class="ajax-upload-form pretty-form" action="${target}"
+        onsubmit="return post_multipart_form(this, '${target}')">
+    <input type="hidden" name="id" value="#${form_id}" />
+    <input type="hidden" name="uh" value="${c.modhash}" />
+    <input type="file" name="file" />
+    <button type="submit">
+      ${_('upload')}
+    </button>
+    ${error_field('IMAGE_ERROR', '')}
+    %if caller:
+      ${caller.body()}
+    %endif
+    <span class="status"></span>
+    <script type="text/javascript">
+      function completedUploadImage (status, img_src, name, errors, form_id) {
+        /* should only be called when the uploaded file is too large */
+        if (status == "failed") {
+          $("#${form_id}").find(".status").html("");
+          for (var i in errors) {
+            $("#${form_id}").find(".error." + errors[i][0])
+                .show().text(errors[i][1]);
+          }
+        }
+      }
+    </script>
+    <iframe src="about:blank" name="${form_id}-iframe" id="${form_id}-iframe">
+    </iframe>
+  </form>
+</%def>
+
 <%def name="image_upload(post_target, current_image = None, onsubmit = '', 
-                         onchange = '', label = '', form_id = 'image-upload', ask_type = False)">
+                         onchange = '', label = '', form_id = 'image-upload',
+                         ask_type = False, hidden_data=None)">
   <form id="${form_id}" enctype="multipart/form-data"
         class="image-upload"
         target="upload-iframe"
@@ -284,6 +317,11 @@ ${unsafe(txt)}
             <input type="hidden" name="r"  value="${c.site.name}" />
           %endif
           <input type="hidden" name="formid" value="${form_id}" />
+          %if hidden_data:
+            %for name, value in hidden_data.iteritems():
+              <input type="hidden" name="${name}" value="${value}" />
+            %endfor
+          %endif
           <br/>
           %if ask_type:
             <label for="img_type">${_("Type: ")}</label>
@@ -522,7 +560,7 @@ ${unsafe(txt)}
 <%def name="timestamp(date, since=None)">
   ## todo: use pubdate attribute once things are <article> tags.
   ## note: comment and link templates will pass a CachedVariable stub as since.
-  <time title="${long_datetime(date)}" datetime="${date.isoformat()}">
+  <time title="${long_datetime(date)}" datetime="${html_datetime(date)}">
     ${unsafe(since or timesince(date))}
   </time>
 </%def>
@@ -557,7 +595,7 @@ ${unsafe(txt)}
 
 <%def name="edited(thing, lastedited=None)">
   %if isinstance(thing.editted, datetime):
-    <time class="edited-timestamp" title="${_('last edited')} ${unsafe(lastedited or timesince(thing.editted))} ${_('ago')}" datetime="${thing.editted.isoformat()}">*</time>
+    <time class="edited-timestamp" title="${_('last edited')} ${unsafe(lastedited or timesince(thing.editted))} ${_('ago')}" datetime="${html_datetime(thing.editted)}">*</time>
   %elif thing.editted:
     <em>*</em>
   %endif

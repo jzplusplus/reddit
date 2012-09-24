@@ -39,9 +39,7 @@ class AdminTools(object):
         all_things = tup(things)
         new_things = [x for x in all_things if not x._spam]
 
-        # No need to accept reports on things with _spam=True,
-        # since nobody can report them in the first place.
-        Report.accept(new_things, True)
+        Report.accept(all_things, True)
 
         for t in all_things:
             if getattr(t, "promoted", None) is not None:
@@ -77,7 +75,7 @@ class AdminTools(object):
             self.author_spammer(new_things, True)
             self.set_last_sr_ban(new_things)
 
-        queries.ban(new_things)
+        queries.ban(all_things, filtered=auto)
 
     def unspam(self, things, unbanner=None, train_spam=True, insert=True):
         from r2.lib.db import queries
@@ -111,8 +109,10 @@ class AdminTools(object):
 
         self.author_spammer(things, False)
         self.set_last_sr_ban(things)
-
         queries.unban(things, insert)
+    
+    def report(self, thing):
+        pass
 
     def author_spammer(self, things, spam):
         """incr/decr the 'spammer' field for the author of every

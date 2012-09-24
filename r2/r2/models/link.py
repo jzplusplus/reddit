@@ -338,8 +338,13 @@ class Link(Thing, Printable):
         site = c.site
 
         if user_is_loggedin:
-            saved  = CassandraSave._fast_query(user, wrapped)
-            hidden = CassandraHide._fast_query(user, wrapped)
+            try:
+                saved = CassandraSave._fast_query(user, wrapped)
+                hidden = CassandraHide._fast_query(user, wrapped)
+            except tdb_cassandra.TRANSIENT_EXCEPTIONS as e:
+                g.log.warning("Cassandra save/hide lookup failed: %r", e)
+                saved = hidden = {}
+
             clicked = {}
         else:
             saved = hidden = clicked = {}
@@ -880,6 +885,7 @@ class CommentSortsCache(tdb_cassandra.View):
     _value_type = 'float'
     _connection_pool = 'main'
     _read_consistency_level = tdb_cassandra.CL.ONE
+    _fetch_all_columns = True
 
 class StarkComment(Comment):
     """Render class for the comments in the top-comments display in
@@ -1242,6 +1248,7 @@ class Click(Relation(Account, Link)): pass
 
 class SimpleRelation(tdb_cassandra.Relation):
     _use_db = False
+    _read_consistency_level = tdb_cassandra.CL.ONE
 
     @classmethod
     def _create(cls, user, link, write_consistency_level = None):

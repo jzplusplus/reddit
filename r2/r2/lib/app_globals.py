@@ -21,12 +21,14 @@
 ###############################################################################
 
 from __future__ import with_statement
+import ConfigParser
 from pylons import config
 import pytz, os, logging, sys, socket, re, subprocess, random
 import signal
 from datetime import timedelta, datetime
 from urlparse import urlparse
 import json
+from r2.lib.contrib import ipaddress
 from sqlalchemy import engine
 from sqlalchemy import event
 from r2.lib.configparse import ConfigValue, ConfigValueParser
@@ -40,6 +42,29 @@ from r2.lib.translation import get_active_langs, I18N_PATH
 from r2.lib.lock import make_lock_factory
 from r2.lib.manager import db_manager
 from r2.lib.stats import Stats, CacheStats, StatsCollectingConnectionPool
+from r2.lib.plugin import PluginLoader
+from r2.config import queues
+
+
+LIVE_CONFIG_NODE = "/config/live"
+
+
+def extract_live_config(config, plugins):
+    """Gets live config out of INI file and validates it according to spec."""
+
+    # ConfigParser will include every value in DEFAULT (which paste abuses)
+    # if we do this the way we're supposed to. sorry for the horribleness.
+    live_config = config._sections["live_config"].copy()
+    del live_config["__name__"]  # magic value used by ConfigParser
+
+    # parse the config data including specs from plugins
+    parsed = ConfigValueParser(live_config)
+    parsed.add_spec(Globals.live_config_spec)
+    for plugin in plugins:
+        parsed.add_spec(plugin.live_config)
+
+    return parsed
+
 
 class Globals(object):
     spec = {
@@ -48,6 +73,7 @@ class Globals(object):
             'db_pool_size',
             'db_pool_overflow_size',
             'page_cache_time',
+            'commentpane_cache_time',
             'num_mc_clients',
             'MIN_DOWN_LINK',
             'MIN_UP_KARMA',
@@ -56,13 +82,13 @@ class Globals(object):
             'MIN_RATE_LIMIT_COMMENT_KARMA',
             'VOTE_AGE_LIMIT',
             'REPLY_AGE_LIMIT',
-            'WIKI_KARMA',
             'HOT_PAGE_AGE',
             'MODWINDOW',
             'RATELIMIT',
             'QUOTA_THRESHOLD',
             'ADMIN_COOKIE_TTL',
             'ADMIN_COOKIE_MAX_IDLE',
+            'OTP_COOKIE_TTL',
             'num_comments',
             'max_comments',
             'max_comments_gold',
@@ -76,9 +102,15 @@ class Globals(object):
             'bcrypt_work_factor',
             'cassandra_pool_size',
             'sr_banned_quota',
+            'sr_wikibanned_quota',
+            'sr_wikicontributor_quota',
             'sr_moderator_quota',
             'sr_contributor_quota',
             'sr_quota_time',
+            'wiki_keep_recent_days',
+            'wiki_max_page_length_bytes',
+            'wiki_max_page_name_length',
+            'wiki_max_page_separators',
         ],
 
         ConfigValue.float: [
@@ -107,12 +139,12 @@ class Globals(object):
             'disable_ratelimit',
             'amqp_logging',
             'read_only_mode',
-            'frontpage_dart',
-            'allow_wiki_editing',
+            'wiki_disabled',
             'heavy_load_mode',
             's3_media_direct',
             'disable_captcha',
             'disable_ads',
+            'disable_require_admin_otp',
             'static_pre_gzipped',
             'static_secure_pre_gzipped',
             'trust_local_proxies',
@@ -151,6 +183,20 @@ class Globals(object):
         },
     }
 
+    live_config_spec = {
+        ConfigValue.bool: [
+            'frontpage_dart',
+        ],
+        ConfigValue.float: [
+            'spotlight_interest_sub_p',
+            'spotlight_interest_nosub_p',
+        ],
+        ConfigValue.tuple: [
+            'sr_discovery_links',
+            'fastlane_links',
+        ],
+    }
+
     def __init__(self, global_conf, app_conf, paths, **extra):
         """
         Globals acts as a container for objects available throughout
@@ -181,14 +227,15 @@ class Globals(object):
 
         self.config = ConfigValueParser(global_conf)
         self.config.add_spec(self.spec)
+        self.plugins = PluginLoader(self.config.get("plugins", []))
+        self.queues = queues.declare_queues()
 
         self.paths = paths
 
         self.running_as_script = global_conf.get('running_as_script', False)
         
         # turn on for language support
-        if not hasattr(self, 'lang'):
-            self.lang = 'en'
+        self.lang = getattr(self, 'site_lang', 'en')
         self.languages, self.lang_name = \
             get_active_langs(default_lang=self.lang)
 
@@ -228,10 +275,30 @@ class Globals(object):
 
         self.cache_chains = {}
 
-        self.lock_cache = CMemcache(self.lockcaches, num_clients=num_mc_clients)
-        self.make_lock = make_lock_factory(self.lock_cache)
+        # for now, zookeeper will be an optional part of the stack.
+        # if it's not configured, we will grab the expected config from the
+        # [live_config] section of the ini file
+        zk_hosts = self.config.get("zookeeper_connection_string")
+        if zk_hosts:
+            from r2.lib.zookeeper import (connect_to_zookeeper,
+                                          LiveConfig, LiveList)
+            zk_username = self.config["zookeeper_username"]
+            zk_password = self.config["zookeeper_password"]
+            self.zookeeper = connect_to_zookeeper(zk_hosts, (zk_username,
+                                                             zk_password))
+            self.live_config = LiveConfig(self.zookeeper, LIVE_CONFIG_NODE)
+            self.throttles = LiveList(self.zookeeper, "/throttles",
+                                      map_fn=ipaddress.ip_network,
+                                      reduce_fn=ipaddress.collapse_addresses)
+        else:
+            self.zookeeper = None
+            parser = ConfigParser.RawConfigParser()
+            parser.read([self.config["__file__"]])
+            self.live_config = extract_live_config(parser, self.plugins)
+            self.throttles = tuple()  # immutable since it's not real
 
         self.memcache = CMemcache(self.memcaches, num_clients = num_mc_clients)
+        self.lock_cache = CMemcache(self.lockcaches, num_clients=num_mc_clients)
 
         self.stats = Stats(self.config.get('statsd_addr'),
                            self.config.get('statsd_sample_rate'))
@@ -240,6 +307,8 @@ class Globals(object):
             self.stats.pg_before_cursor_execute)
         event.listens_for(engine.Engine, 'after_cursor_execute')(
             self.stats.pg_after_cursor_execute)
+
+        self.make_lock = make_lock_factory(self.lock_cache, self.stats)
 
         if not self.cassandra_seeds:
             raise ValueError("cassandra_seeds not set in the .ini")
@@ -334,7 +403,8 @@ class Globals(object):
             https_url = urlparse(self.https_endpoint)
             self.secure_domains.add(https_url.netloc)
             self.trusted_domains.add(https_url.hostname)
-
+        if getattr(self, 'oauth_domain', None):
+            self.secure_domains.add(self.oauth_domain)
 
         # load the unique hashed names of files under static
         static_files = os.path.join(self.paths.get('static_files'), 'static')
@@ -387,15 +457,14 @@ class Globals(object):
         r2_gitdir = os.path.join(r2_root, ".git")
         self.short_version = self.record_repo_version("r2", r2_gitdir)
 
-        i18n_git_path = os.path.join(os.path.dirname(I18N_PATH), ".git")
-        self.record_repo_version("i18n", i18n_git_path)
+        if I18N_PATH:
+            i18n_git_path = os.path.join(os.path.dirname(I18N_PATH), ".git")
+            self.record_repo_version("i18n", i18n_git_path)
 
         if self.log_start:
             self.log.error("reddit app %s:%s started %s at %s" %
                            (self.reddit_host, self.reddit_pid,
                             self.short_version, datetime.now()))
-
-        initialize_admin_globals(self)
 
     def record_repo_version(self, repo_name, git_dir):
         """Get the currently checked out git revision for a given repository,
@@ -495,11 +564,3 @@ class Globals(object):
         here.
         """
         pass
-
-def initialize_admin_globals(g):
-    pass
-
-try:
-    from r2admin.lib.app_globals import initialize_admin_globals
-except ImportError:
-    pass

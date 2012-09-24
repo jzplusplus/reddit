@@ -24,7 +24,7 @@ from pylons import c, g, request, response
 from pylons.i18n import _
 from pylons.controllers.util import abort
 from r2.config.extensions import api_type
-from r2.lib import utils, captcha, promote
+from r2.lib import utils, captcha, promote, totp
 from r2.lib.filters import unkeep_space, websafe, _force_unicode
 from r2.lib.filters import markdown_souptest
 from r2.lib.db import tdb_cassandra
@@ -51,6 +51,11 @@ def visible_promo(article):
     is_promo = getattr(article, "promoted", None) is not None
     is_author = (c.user_is_loggedin and
                  c.user._id == article.author_id)
+
+    # subreddit discovery links are visible even without a live campaign
+    if article._fullname in g.live_config['sr_discovery_links']:
+        return True
+    
     # promos are visible only if comments are not disabled and the
     # user is either the author or the link is live/previously live.
     if is_promo:
@@ -69,16 +74,18 @@ def can_comment_link(article):
 
 class Validator(object):
     default_param = None
-    def __init__(self, param=None, default=None, post=True, get=True, url=True):
+    def __init__(self, param=None, default=None, post=True, get=True, url=True,
+                 docs=None):
         if param:
             self.param = param
         else:
             self.param = self.default_param
 
         self.default = default
-        self.post, self.get, self.url = post, get, url
+        self.post, self.get, self.url, self.docs = post, get, url, docs
+        self.has_errors = False
 
-    def set_error(self, error, msg_params = {}, field = False):
+    def set_error(self, error, msg_params={}, field=False, code=None):
         """
         Adds the provided error to c.errors and flags that it is come
         from the validator's param
@@ -86,12 +93,15 @@ class Validator(object):
         if field is False:
             field = self.param
 
-        c.errors.add(error, msg_params = msg_params, field = field)
+        c.errors.add(error, msg_params=msg_params, field=field, code=code)
+        self.has_errors = True
 
     def param_docs(self):
         param_info = {}
         for param in filter(None, tup(self.param)):
             param_info[param] = None
+        if self.docs:
+            param_info.update(self.docs)
         return param_info
 
     def __call__(self, url):
@@ -107,7 +117,14 @@ class Validator(object):
                 else:
                     val = self.default
                 a.append(val)
-        return self.run(*a)
+        try:
+            return self.run(*a)
+        except TypeError, e:
+            if str(e).startswith('run() takes'):
+                # Prepend our class name so we know *which* run()
+                raise TypeError('%s.%s' % (type(self).__name__, str(e)))
+            else:
+                raise
 
 
 def build_arg_list(fn, env):
@@ -143,6 +160,8 @@ def set_api_docs(fn, simple_vals, param_vals):
     for validator in chain(simple_vals, param_vals.itervalues()):
         param_info.update(validator.param_docs())
     doc['parameters'] = param_info
+
+make_validated_kw = _make_validated_kw
 
 def validate(*simple_vals, **param_vals):
     def val(fn):
@@ -225,12 +244,11 @@ def json_validate(self, self_method, responder, simple_vals, param_vals, *a, **k
         abort(404)
 
     val = self_method(self, responder, *a, **kw)
-    if not val:
+    if val is None:
         val = responder.make_response()
     return self.api_wrapper(val)
 
-@api_validate("html")
-def validatedForm(self, self_method, responder, simple_vals, param_vals,
+def _validatedForm(self, self_method, responder, simple_vals, param_vals,
                   *a, **kw):
     # generate a form object
     form = responder(request.POST.get('id', "body"))
@@ -255,6 +273,23 @@ def validatedForm(self, self_method, responder, simple_vals, param_vals,
     else:
         return self.api_wrapper(responder.make_response())
 
+@api_validate("html")
+def validatedForm(self, self_method, responder, simple_vals, param_vals,
+                  *a, **kw):
+    return _validatedForm(self, self_method, responder, simple_vals, param_vals,
+                          *a, **kw)
+
+@api_validate("html")
+def validatedMultipartForm(self, self_method, responder, simple_vals,
+                           param_vals, *a, **kw):
+    def wrapped_self_method(*a, **kw):
+        val = self_method(*a, **kw)
+        if val:
+            return val
+        else:
+            return self.iframe_api_wrapper(responder.make_response())
+    return _validatedForm(self, wrapped_self_method, responder, simple_vals,
+                          param_vals, *a, **kw)
 
 
 #### validators ####
@@ -505,7 +540,7 @@ class VSelfText(VMarkdown):
     def get_max_length(self):
         if c.site.link_type == "self":
             return self._max_length * 4
-        return self._max_length
+        return self._max_length * 1.5
 
     max_length = property(get_max_length, set_max_length)
 
@@ -978,6 +1013,9 @@ class VSanitizedUrl(Validator):
     def run(self, url):
         return utils.sanitize_url(url)
 
+    def param_docs(self):
+        return {self.param: _("a valid URL")}
+
 class VUrl(VRequired):
     def __init__(self, item, allow_self = True, lookup = True, *a, **kw):
         self.allow_self = allow_self
@@ -1017,11 +1055,15 @@ class VUrl(VRequired):
         return self.error(errors.BAD_URL)
 
     def param_docs(self):
+        if isinstance(self.param, (list, tuple)):
+            param_names = self.param
+        else:
+            param_names = [self.param]
         params = {}
         try:
-            params[self.param[0]] = _('a valid URL')
-            params[self.param[1]] = _('a subreddit')
-            params[self.param[2]] = _('boolean value')
+            params[param_names[0]] = _('a valid URL')
+            params[param_names[1]] = _('a subreddit')
+            params[param_names[2]] = _('boolean value')
         except IndexError:
             pass
         return params
@@ -1057,7 +1099,8 @@ class VExistingUname(VRequired):
                 return Account._by_name(name)
             except NotFound:
                 self.error(errors.USER_DOESNT_EXIST)
-        self.error()
+        else:
+            self.error()
 
     def param_docs(self):
         return {
@@ -1153,6 +1196,9 @@ class VFloat(VNumber):
         return float(val)
 
 class VBid(VNumber):
+    '''
+    DEPRECATED. Use VFloat instead and check bid amount in function body.
+    '''
     def __init__(self, bid, link_id, sr):
         self.duration = 1
         VNumber.__init__(self, (bid, link_id, sr),
@@ -1334,7 +1380,7 @@ class VDelay(Validator):
         prev_violations["duration"] = duration
         prev_violations["count"] += 1
 
-        with g.make_lock("lock-" + key, timeout=5, verbose=False):
+        with g.make_lock("record_violation", "lock-" + key, timeout=5, verbose=False):
             existing = g.memcache.get(key)
             if existing and existing["count"] > prev_violations["count"]:
                 g.log.warning("Tried to set %s to count=%d, but found existing=%d"
@@ -1362,29 +1408,19 @@ class CachedUser(object):
         if self.key and self.cache_prefix:
             g.cache.delete(str(self.cache_prefix + "_" + self.key))
 
-
-class VCacheKey(Validator):
-    def __init__(self, cache_prefix, param, *a, **kw):
-        self.cache = g.cache
-        self.cache_prefix = cache_prefix
-        Validator.__init__(self, param, *a, **kw)
+class VOneTimeToken(Validator):
+    def __init__(self, model, param, *args, **kwargs):
+        self.model = model
+        Validator.__init__(self, param, *args, **kwargs)
 
     def run(self, key):
-        c_user = CachedUser(self.cache_prefix, None, key)
-        if key:
-            uid = self.cache.get(str(self.cache_prefix + "_" + key))
-            if uid:
-                try:
-                    c_user.user = Account._byID(uid, data = True)
-                except NotFound:
-                    return
-            return c_user
-        self.set_error(errors.EXPIRED)
+        token = self.model.get_token(key)
 
-class VHardCacheKey(VCacheKey):
-    def __init__(self, cache_prefix, param, *a, **kw):
-        VCacheKey.__init__(self, cache_prefix, param, *a, **kw)
-        self.cache = g.hardcache
+        if token:
+            return token
+        else:
+            self.set_error(errors.EXPIRED)
+            return None
 
 class VOneOf(Validator):
     def __init__(self, param, options = (), *a, **kw):
@@ -1622,6 +1658,24 @@ class ValidAddress(Validator):
             country = pycountry.countries.get(alpha2=country)
             if country.name not in self.allowed_countries:
                 self.set_error(_("Our ToS don't cover your country (yet). Sorry."), "country")
+
+        # Make sure values don't exceed max length defined in the authorize.net
+        # xml schema: https://api.authorize.net/xml/v1/schema/AnetApiSchema.xsd
+        max_lengths = [
+            (firstName, 50, 'firstName'), # (argument, max len, form field name)
+            (lastName, 50, 'lastName'),
+            (company, 50, 'company'),
+            (address, 60, 'address'),
+            (city, 40, 'city'),
+            (state, 40, 'state'),
+            (zipCode, 20, 'zip'),
+            (phoneNumber, 255, 'phoneNumber')
+        ]
+        for (arg, max_length, form_field_name) in max_lengths:
+            if arg and len(arg) > max_length:
+                self.set_error(_("max length %d characters" % max_length), form_field_name)
+
+        if not self.has_errors: 
             return Address(firstName = firstName,
                            lastName = lastName,
                            company = company or "",
@@ -1650,14 +1704,14 @@ class ValidCard(Validator):
             self.set_error(_("dates should be YYYY-MM"), "expirationDate")
             has_errors = True
         else:
-            now = datetime.now()
+            now = datetime.now(g.tz)
             yyyy, mm = expirationDate.split("-")
             year = int(yyyy)
             month = int(mm)
             if month < 1 or month > 12:
                 self.set_error(_("month must be in the range 01..12"), "expirationDate")
                 has_errors = True
-            elif datetime(year, month, now.day) < now:
+            elif datetime(year, month, 1) < datetime(now.year, now.month, 1):
                 self.set_error(_("expiration date must be in the future"), "expirationDate")
                 has_errors = True
 
@@ -1742,3 +1796,105 @@ class VFlairTemplateByID(VRequired):
                 c.site._id, flair_template_id)
         except tdb_cassandra.NotFound:
             return None
+
+class VOneTimePassword(Validator):
+    max_skew = 2  # check two periods to allow for some clock skew
+    ratelimit = 3  # maximum number of tries per period
+
+    def __init__(self, param, required):
+        self.required = required
+        Validator.__init__(self, param)
+
+    @classmethod
+    def validate_otp(cls, secret, password):
+        # is the password a valid format and has it been used?
+        try:
+            key = "otp-%s-%d" % (c.user._id36, int(password))
+        except (TypeError, ValueError):
+            valid_and_unused = False
+        else:
+            # leave this key around for one more time period than the maximum
+            # number of time periods we'll check for valid passwords
+            key_ttl = totp.PERIOD * (cls.max_skew + 1)
+            valid_and_unused = g.cache.add(key, True, time=key_ttl)
+
+        # check the password (allowing for some clock-skew as 2FA-users
+        # frequently travel at relativistic velocities)
+        if valid_and_unused:
+            for skew in range(cls.max_skew):
+                expected_otp = totp.make_totp(secret, skew=skew)
+                if constant_time_compare(password, expected_otp):
+                    return True
+
+        return False
+
+    def run(self, password):
+        # does the user have 2FA configured?
+        secret = c.user.otp_secret
+        if not secret:
+            if self.required:
+                self.set_error(errors.NO_OTP_SECRET)
+            return
+
+        # do they have the otp cookie instead?
+        if c.otp_cached:
+            return
+
+        # make sure they're not trying this too much
+        if not g.disable_ratelimit:
+            current_password = totp.make_totp(secret)
+            key = "otp-tries-" + current_password
+            g.cache.add(key, 0)
+            recent_attempts = g.cache.incr(key)
+            if recent_attempts > self.ratelimit:
+                self.set_error(errors.RATELIMIT, dict(time="30 seconds"))
+                return
+
+        # check the password
+        if self.validate_otp(secret, password):
+            return
+
+        # if we got this far, their password was wrong, invalid or already used
+        self.set_error(errors.WRONG_PASSWORD)
+
+class VOAuth2ClientID(VRequired):
+    default_param = "client_id"
+    default_param_doc = _("an app")
+    def __init__(self, param=None, *a, **kw):
+        VRequired.__init__(self, param, errors.OAUTH2_INVALID_CLIENT, *a, **kw)
+
+    def run(self, client_id):
+        client_id = VRequired.run(self, client_id)
+        if client_id:
+            client = OAuth2Client.get_token(client_id)
+            if client and not getattr(client, 'deleted', False):
+                return client
+            else:
+                self.error()
+
+    def param_docs(self):
+        return {self.default_param: self.default_param_doc}
+
+class VOAuth2ClientDeveloper(VOAuth2ClientID):
+    default_param_doc = _("an app developed by the user")
+
+    def run(self, client_id):
+        client = super(VOAuth2ClientDeveloper, self).run(client_id)
+        if not client or not client.has_developer(c.user):
+            return self.error()
+        return client
+
+class VOAuth2Scope(VRequired):
+    default_param = "scope"
+    def __init__(self, param=None, *a, **kw):
+        VRequired.__init__(self, param, errors.OAUTH2_INVALID_SCOPE, *a, **kw)
+
+    def run(self, scope):
+        from r2.controllers.oauth2 import scope_info
+        scope = VRequired.run(self, scope)
+        if scope:
+            scope_list = scope.split(',')
+            if all(scope in scope_info for scope in scope_list):
+                return scope_list
+            else:
+                self.error()

@@ -21,6 +21,8 @@
 ###############################################################################
 
 class ConfigValue(object):
+    _bool_map = dict(true=True, false=False)
+
     @staticmethod
     def int(v, key=None, data=None):
         return int(v)
@@ -31,7 +33,12 @@ class ConfigValue(object):
 
     @staticmethod
     def bool(v, key=None, data=None):
-        return (v.lower() == 'true') if v else None
+        if v in (True, False, None):
+            return bool(v)
+        try:
+            return ConfigValue._bool_map[v.lower()]
+        except KeyError:
+            raise ValueError("Unknown value for %r: %r" % (key, v))
 
     @staticmethod
     def tuple(v, key=None, data=None):

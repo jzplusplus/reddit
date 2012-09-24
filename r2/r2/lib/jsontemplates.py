@@ -20,6 +20,8 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+import calendar
+
 from utils import to36, tup, iters
 from wrapped import Wrapped, StringTemplate, CacheStub, CachedVariable, Templated
 from mako.template import Template
@@ -208,7 +210,9 @@ class SubredditJsonTemplate(ThingJsonTemplate):
                                                 display_name = "name",
                                                 header_img   = "header",
                                                 header_size  = "header_size",
-                                                header_title = "header_title")
+                                                header_title = "header_title",
+                                                accounts_active = "accounts_active",
+                                                )
 
     def thing_attr(self, thing, attr):
         # Don't reveal revenue information via /r/lounge's subscribers
@@ -539,11 +543,43 @@ class OrganicListingJsonTemplate(ListingJsonTemplate):
 class TrafficJsonTemplate(JsonTemplate):
     def render(self, thing, *a, **kw):
         res = {}
-        for ival in ("hour", "day", "month"):
-            if hasattr(thing, ival + "_data"):
-                res[ival] = [[time.mktime(date.timetuple())] + list(data)
-                             for date, data in getattr(thing, ival+"_data")]
+
+        for interval in ("hour", "day", "month"):
+            # we don't actually care about the column definitions (used for
+            # charting) here, so just pass an empty list.
+            interval_data = thing.get_data_for_interval(interval, [])
+
+            # turn the python datetimes into unix timestamps and flatten data
+            res[interval] = [(calendar.timegm(date.timetuple()),) + data
+                             for date, data in interval_data]
+
         return ObjectTemplate(res)
+
+class WikiJsonTemplate(JsonTemplate):
+    def render(self, thing, *a, **kw):
+        try:
+            content = thing.content
+        except AttributeError:
+            content = thing.revisions
+        return ObjectTemplate(content.render() if thing else {})
+
+class WikiViewJsonTemplate(ThingJsonTemplate):
+    def render(self, thing, *a, **kw):
+        edit_date = time.mktime(thing.edit_date.timetuple())
+        return ObjectTemplate(dict(content_md=thing.page_content_md,
+                                   content_html=thing.page_content,
+                                   revision_by=thing.edit_by,
+                                   revision_date=edit_date,
+                                   may_revise=thing.may_revise))
+
+class WikiRevisionJsonTemplate(ThingJsonTemplate):
+    def render(self, thing, *a, **kw):
+        timestamp = time.mktime(thing.date.timetuple())
+        return ObjectTemplate(dict(author=thing._get('author'),
+                                   id=str(thing._id),
+                                   timestamp=timestamp,
+                                   reason=thing._get('reason'),
+                                   page=thing.page))
 
 class FlairListJsonTemplate(JsonTemplate):
     def render(self, thing, *a, **kw):
@@ -572,7 +608,8 @@ class FlairCsvJsonTemplate(JsonTemplate):
 class StylesheetTemplate(ThingJsonTemplate):
     _data_attrs_ = dict(subreddit_id = '_fullname',
                         stylesheet = 'stylesheet_contents',
-                        images = '_images')
+                        images = '_images',
+                        prevstyle = 'prev_stylesheet')
 
     def kind(self, wrapped):
         return 'stylesheet'
@@ -590,6 +627,8 @@ class StylesheetTemplate(ThingJsonTemplate):
             return self.images()
         elif attr == '_fullname':
             return c.site._fullname
+        elif attr == 'prev_stylesheet':
+            return c.site.prev_stylesheet
         return ThingJsonTemplate.thing_attr(self, thing, attr)
 
 class SubredditSettingsTemplate(ThingJsonTemplate):
@@ -597,6 +636,8 @@ class SubredditSettingsTemplate(ThingJsonTemplate):
                         title = 'site.title',
                         description = 'site.description',
                         public_description = 'site.public_description',
+                        prev_description_id = 'site.prev_description_id',
+                        prev_public_description_id = 'site.prev_public_description_id',
                         language = 'site.lang',
                         subreddit_type = 'site.type',
                         content_options = 'site.link_type',
@@ -605,6 +646,9 @@ class SubredditSettingsTemplate(ThingJsonTemplate):
                         show_media = 'site.show_media',
                         domain = 'site.domain',
                         domain_css = 'site.css_on_cname',
+                        wikimode = 'site.wikimode',
+                        wiki_edit_karma = 'site.wiki_edit_karma',
+                        wiki_edit_age = 'site.wiki_edit_age',
                         domain_sidebar = 'site.show_cname_sidebar',
                         header_hover_text = 'site.header_title')
 

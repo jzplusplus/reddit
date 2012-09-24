@@ -26,19 +26,26 @@ from pylons import c, g
 from pylons.i18n import _
 
 from r2.lib.db.thing import Thing, Relation, NotFound
-from account import Account
+from account import Account, AccountsActiveBySR
 from printable import Printable
 from r2.lib.db.userrel import UserRel
 from r2.lib.db.operators import lower, or_, and_, desc
 from r2.lib.memoize import memoize
 from r2.lib.utils import tup, interleave_lists, last_modified_multi, flatten
-from r2.lib.utils import timeago
+from r2.lib.utils import timeago, summarize_markdown
 from r2.lib.cache import sgm
 from r2.lib.strings import strings, Score
 from r2.lib.filters import _force_unicode
 from r2.lib.db import tdb_cassandra
+from r2.models.wiki import WikiPage
+from r2.lib.merge import ConflictException
 from r2.lib.cache import CL_ONE
 
+import math
+
+from r2.lib.utils import set_last_modified
+from r2.models.wiki import WikiPage
+from md5 import md5
 import os.path
 import random
 
@@ -58,8 +65,6 @@ class Subreddit(Thing, Printable):
                      header_size = None,
                      header_title = "",
                      allow_top = False, # overridden in "_new"
-                     public_description = '',
-                     description = '',
                      images = {},
                      reported = 0,
                      valid_votes = 0,
@@ -67,6 +72,9 @@ class Subreddit(Thing, Printable):
                      show_cname_sidebar = False,
                      css_on_cname = True,
                      domain = None,
+                     wikimode = "disabled",
+                     wiki_edit_karma = 100,
+                     wiki_edit_age = 0,
                      over_18 = False,
                      mod_actions = 0,
                      sponsorship_text = "this reddit is sponsored by",
@@ -81,6 +89,10 @@ class Subreddit(Thing, Printable):
                      flair_self_assign_enabled = False,
                      link_flair_self_assign_enabled = False,
                      use_quotas = True,
+                     description = "",
+                     public_description = "",
+                     prev_description_id = "",
+                     prev_public_description_id = "",
                      )
     _essentials = ('type', 'name', 'lang')
     _data_int_props = Thing._data_int_props + ('mod_actions', 'reported')
@@ -95,7 +107,7 @@ class Subreddit(Thing, Printable):
     @classmethod
     def _new(cls, name, title, author_id, ip, lang = g.lang, type = 'private',
              over_18 = False, **kw):
-        with g.make_lock('create_sr_' + name.lower()):
+        with g.make_lock("create_sr", 'create_sr_' + name.lower()):
             try:
                 sr = Subreddit._by_name(name)
                 raise SubredditExists
@@ -199,12 +211,38 @@ class Subreddit(Thing, Printable):
         return self.moderator_ids()
 
     @property
+    def stylesheet_contents_user(self):
+        try:
+            return WikiPage.get(self, 'config/stylesheet')._get('content','')
+        except tdb_cassandra.NotFound:
+           return  self._t.get('stylesheet_contents_user')
+
+    @property
+    def prev_stylesheet(self):
+        try:
+            return WikiPage.get(self, 'config/stylesheet')._get('revision','')
+        except tdb_cassandra.NotFound:
+            return ''
+
+    @property
     def contributors(self):
         return self.contributor_ids()
 
     @property
     def banned(self):
         return self.banned_ids()
+    
+    @property
+    def wikibanned(self):
+        return self.wikibanned_ids()
+    
+    @property
+    def wikicontributor(self):
+        return self.wikicontributor_ids()
+    
+    @property
+    def _should_wiki(self):
+        return True
 
     @property
     def subscribers(self):
@@ -213,6 +251,29 @@ class Subreddit(Thing, Printable):
     @property
     def flair(self):
         return self.flair_ids()
+
+    @property
+    def accounts_active(self):
+        return self.get_accounts_active()[0]
+
+    def get_accounts_active(self):
+        fuzzed = False
+        count = AccountsActiveBySR.get_count(self)
+        key = 'get_accounts_active-' + self._id36
+
+        # Fuzz counts having low values, for privacy reasons
+        if count < 100 and not c.user_is_admin:
+            fuzzed = True
+            cached_count = g.cache.get(key)
+            if not cached_count:
+                # decay constant is e**(-x / 60)
+                decay = math.exp(float(-count) / 60)
+                jitter = round(5 * decay)
+                count = count + random.randint(0, jitter)
+                g.cache.set(key, count, time=5*60)
+            else:
+                count = cached_count
+        return count, fuzzed
 
     def spammy(self):
         return self._spam
@@ -258,6 +319,32 @@ class Subreddit(Thing, Printable):
             return c.user_is_admin or self.is_moderator(user)
         else:
             return False
+    
+    def parse_css(self, content, verify=True):
+        from r2.lib import cssfilter
+        if g.css_killswitch or (verify and not self.can_change_stylesheet(c.user)):
+            return (None, None)
+    
+        parsed, report = cssfilter.validate_css(content)
+        parsed = parsed.cssText if parsed else ''
+        return (report, parsed)
+
+    def change_css(self, content, parsed, prev=None, reason=None, author=None, force=False):
+        from r2.models import ModAction
+        author = author if author else c.user.name
+        if content is None:
+            content = ''
+        try:
+            wiki = WikiPage.get(self, 'config/stylesheet')
+        except tdb_cassandra.NotFound:
+            wiki = WikiPage.create(self, 'config/stylesheet')
+        wr = wiki.revise(content, previous=prev, author=author, reason=reason, force=force)
+        self.stylesheet_contents = parsed
+        self.stylesheet_hash = md5(parsed).hexdigest()
+        set_last_modified(self, 'stylesheet_contents')
+        c.site._commit()
+        ModAction.create(self, c.user, action='wikirevise', details='Updated subreddit stylesheet')
+        return wr
 
     def is_special(self, user):
         return (user
@@ -348,6 +435,10 @@ class Subreddit(Thing, Printable):
         from r2.lib.db import queries
         return queries.get_modqueue(self)
 
+    def get_unmoderated(self):
+        from r2.lib.db import queries
+        return queries.get_unmoderated(self)
+
     def get_all_comments(self):
         from r2.lib.db import queries
         return queries.get_sr_comments(self)
@@ -392,7 +483,11 @@ class Subreddit(Thing, Printable):
             from r2.lib.pages import UserText
             item.description_usertext = UserText(item, item.description, target=target)
             if item.public_description or item.description:
-                item.public_description_usertext = UserText(item, item.public_description or item.description, target=target)
+                text = (item.public_description or
+                        summarize_markdown(item.description))
+                item.public_description_usertext = UserText(item,
+                                                            text,
+                                                            target=target)
             else:
                 item.public_description_usertext = None
 
@@ -497,9 +592,27 @@ class Subreddit(Thing, Printable):
         if user and user.has_subscribed:
             sr_ids = Subreddit.reverse_subscriber_ids(user)
 
+            # don't count automatic reddits against the limit
+            if g.automatic_reddits:
+                subscribed_automatic = [sr._id for sr in
+                                        Subreddit._by_name(g.automatic_reddits,
+                                        stale=stale).itervalues()]
+
+                for sr_id in list(subscribed_automatic):
+                    try:
+                        sr_ids.remove(sr_id)
+                    except ValueError:
+                        subscribed_automatic.remove(sr_id)
+            else:
+                subscribed_automatic = []
+
             if limit and len(sr_ids) > limit:
                 sr_ids.sort()
                 sr_ids = cls.random_reddits(user.name, sr_ids, limit)
+
+            # we can now add the automatic ones (that the user wants) back in
+            sr_ids += subscribed_automatic
+
             return sr_ids if ids else Subreddit._byID(sr_ids,
                                                       data=True,
                                                       return_dict=False,
@@ -664,6 +777,10 @@ class FakeSubreddit(Subreddit):
         Subreddit.__init__(self)
         self.title = ''
         self.link_flair_position = 'right'
+
+    @property
+    def _should_wiki(self):
+        return False
 
     def is_moderator(self, user):
         return c.user_is_loggedin and c.user_is_admin
@@ -854,10 +971,32 @@ class DefaultSR(_DefaultSR):
             self._base = Subreddit._by_name(g.default_sr, stale=True)
         except NotFound:
             self._base = None
-
+    
+    @property
+    def _should_wiki(self):
+        return True
+    
+    @property
+    def wikimode(self):
+        return self._base.wikimode
+    
+    @property
+    def wiki_edit_karma(self):
+        return self._base.wiki_edit_karma
+    
+    def is_wikibanned(self, user):
+        return self._base.is_banned(user)
+    
+    def is_wikicreate(self, user):
+        return self._base.is_wikicreate(user)
+    
     @property
     def _fullname(self):
         return "t5_6"
+    
+    @property
+    def _id36(self):
+        return self._base._id36
 
     @property
     def type(self):
@@ -1035,7 +1174,9 @@ class SRMember(Relation(Subreddit, Account)): pass
 Subreddit.__bases__ += (UserRel('moderator', SRMember),
                         UserRel('contributor', SRMember),
                         UserRel('subscriber', SRMember, disable_ids_fn = True),
-                        UserRel('banned', SRMember))
+                        UserRel('banned', SRMember),
+                        UserRel('wikibanned', SRMember),
+                        UserRel('wikicontributor', SRMember))
 
 class SubredditPopularityByLanguage(tdb_cassandra.View):
     _use_db = True

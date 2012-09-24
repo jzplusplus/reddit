@@ -28,6 +28,7 @@ import re
 import json
 
 from r2.lib.translation import iter_langs
+from r2.lib.plugin import PluginLoader
 
 try:
     from pylons import g, c, config
@@ -59,7 +60,7 @@ class ClosureCompiler(object):
             raise ClosureError(msg)
         else:
             return out, msg
-    
+
     def compile(self, data, dest, args=None):
         """Run closure compiler on a string of source code `data`, writing the
         result to output file `dest`. A ClosureError exception will be raised if
@@ -71,7 +72,7 @@ class Source(object):
     def get_source(self):
         """Return the full JavaScript source code."""
         raise NotImplementedError
-    
+
     def use(self):
         """Return HTML to insert the JavaScript source inside a template."""
         raise NotImplementedError
@@ -88,7 +89,7 @@ class FileSource(Source):
     """A JavaScript source file on disk."""
     def __init__(self, name):
         self.name = name
-    
+
     def get_source(self):
         return open(self.path).read()
 
@@ -134,11 +135,12 @@ class Module(Source):
         return os.path.join(STATIC_ROOT, "static", self.name)
 
     def build(self, closure):
-        print >> sys.stderr, "Compiling {0}...".format(self.name),
         with open(self.path, "w") as out:
             if self.should_compile:
+                print >> sys.stderr, "Compiling {0}...".format(self.name),
                 closure.compile(self.get_source(), out)
             else:
+                print >> sys.stderr, "Concatenating {0}...".format(self.name),
                 out.write(self.get_source())
         print >> sys.stderr, " done."
 
@@ -158,10 +160,7 @@ class Module(Source):
 
     @property
     def outputs(self):
-        if self.should_compile:
-            return [self.path]
-        else:
-            return []
+        return [self.path]
 
 class StringsSource(Source):
     """A virtual source consisting of localized strings from r2.lib.strings."""
@@ -184,7 +183,7 @@ class StringsSource(Source):
                 data[key] = strings.strings[key]
         else:
             data = dict(strings.strings)
-        
+
         output = self.prepend + json.dumps(data) + "\n"
 
         if self.lang:
@@ -247,18 +246,15 @@ class LocalizedModule(Module):
 class JQuery(Module):
     version = "1.7.2"
 
-    def __init__(self, cdn_src=None):
-        local_jquery_path = os.path.join("js", "lib", "jquery-%s.min.js" % self.version)
-        Module.__init__(self, local_jquery_path, should_compile=False)
-        self.cdn_src = cdn_src or "http://ajax.googleapis.com/ajax/libs/jquery/%s/jquery" % self.version
-    
-    def build(self, closure):
-        pass
+    def __init__(self, cdn_url="http://ajax.googleapis.com/ajax/libs/jquery/{version}/jquery"):
+        self.jquery_src = FileSource("lib/jquery-{0}.min.js".format(self.version))
+        Module.__init__(self, "jquery.js", self.jquery_src, should_compile=False)
+        self.cdn_src = cdn_url.format(version=self.version)
 
     def use(self):
         from r2.lib.template_helpers import static
-        if c.secure or c.user.pref_local_js:
-            return script_tag.format(src=static(self.name))
+        if c.secure or (c.user and c.user.pref_local_js):
+            return Module.use(self)
         else:
             ext = ".js" if g.uncompressedJS else ".min.js"
             return script_tag.format(src=self.cdn_src+ext)
@@ -267,19 +263,28 @@ module = {}
 
 module["jquery"] = JQuery()
 
+module["html5shiv"] = Module("html5shiv.js",
+    "lib/html5shiv.js",
+    should_compile=False
+)
+
 module["reddit"] = LocalizedModule("reddit.js",
     "lib/json2.js",
+    "lib/underscore-1.3.3.js",
     "lib/store.js",
     "lib/jquery.cookie.js",
     "lib/jquery.url.js",
     "jquery.reddit.js",
     "base.js",
+    "utils.js",
     "ui.js",
     "login.js",
     "analytics.js",
     "flair.js",
+    "interestbar.js",
+    "wiki.js",
     "reddit.js",
-    "utils.js",
+    "apps.js",
 )
 
 module["mobile"] = LocalizedModule("mobile.js",
@@ -300,18 +305,34 @@ module["sponsored"] = Module("sponsored.js",
     "sponsored.js"
 )
 
-module["flot"] = Module("jquery.flot.js",
-    "lib/jquery.flot.js"
+module["timeseries"] = Module("timeseries.js",
+    "lib/jquery.flot.js",
+    "lib/jquery.flot.time.js",
+    "timeseries.js",
+)
+
+module["timeseries-ie"] = Module("timeseries-ie.js",
+    "lib/excanvas.min.js",
+    module["timeseries"],
+)
+
+module["traffic"] = LocalizedModule("traffic.js",
+    "traffic.js",
+)
+
+module["qrcode"] = Module("qrcode.js",
+    "lib/jquery.qrcode.min.js",
+    "qrcode.js",
 )
 
 def use(*names):
     return "\n".join(module[name].use() for name in names)
 
-def load_plugin_modules():
-    from r2.lib.plugin import PluginLoader
-    for plugin in PluginLoader.available_plugins():
-        plugin_cls = plugin.load()
-        plugin_cls().add_js(module)
+def load_plugin_modules(plugins=None):
+    if not plugins:
+        plugins = PluginLoader()
+    for plugin in plugins:
+        plugin.add_js(module)
 
 commands = {}
 def build_command(fn):
@@ -324,8 +345,7 @@ def build_command(fn):
 @build_command
 def enumerate_modules():
     for name, m in module.iteritems():
-        if m.should_compile:
-            print name
+        print name
 
 @build_command
 def dependencies(name):

@@ -43,6 +43,7 @@ log = g.log
 amqp_virtual_host = g.amqp_virtual_host
 amqp_logging = g.amqp_logging
 stats = g.stats
+queues = g.queues
 
 #there are two ways of interacting with this module: add_item and
 #handle_items/consume_items. _add_item (the internal function for
@@ -129,11 +130,22 @@ class ConnectionManager(local):
         return self.channel
 
     def init_queue(self):
-        from r2.lib.queues import RedditQueueMap
-
         chan = self.get_channel()
+        chan.exchange_declare(exchange=amqp_exchange,
+                              type="direct",
+                              durable=True,
+                              auto_delete=False)
 
-        RedditQueueMap(amqp_exchange, chan).init()
+        for queue in queues:
+            chan.queue_declare(queue=queue.name,
+                               durable=queue.durable,
+                               exclusive=queue.exclusive,
+                               auto_delete=queue.auto_delete)
+
+        for queue, key in queues.bindings:
+            chan.queue_bind(routing_key=key,
+                            queue=queue,
+                            exchange=amqp_exchange)
 
 connection_manager = ConnectionManager()
 
@@ -298,8 +310,6 @@ def empty_queue(queue):
 
 def black_hole(queue):
     """continually empty out a queue as new items are created"""
-    chan = connection_manager.get_channel()
-
     def _ignore(msg):
         print 'Ignoring msg: %r' % msg.body
 
@@ -352,22 +362,3 @@ def dedup_queue(queue, rk = None, limit=None,
         worker.join()
 
         chan.basic_ack(0, multiple=True)
-
-
-def _test_setup(test_q = 'test_q'):
-    from r2.lib.queues import RedditQueueMap
-    chan = connection_manager.get_channel()
-    rqm = RedditQueueMap(amqp_exchange, chan)
-    rqm._q(test_q, durable=False, auto_delete=True, self_refer=True)
-    return chan
-
-def test_consume(test_q = 'test_q'):
-    chan = _test_setup()
-    def _print(msg):
-        print msg.body
-    consume_items(test_q, _print)
-
-def test_produce(test_q = 'test_q', msg_body = 'hello, world!'):
-    _test_setup()
-    add_item(test_q, msg_body)
-    worker.join()

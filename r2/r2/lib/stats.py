@@ -85,12 +85,11 @@ class Stats:
         if self.connection:
             return self.statsd.timer.Timer(name, self.connection)
         else:
-            return None
+            return utils.SimpleSillyStub()
 
     def transact(self, action, service_time_sec):
         timer = self.get_timer('service_time')
-        if timer:
-            timer.send(action, service_time_sec)
+        timer.send(action, service_time_sec)
 
     def get_counter(self, name):
         if self.connection:

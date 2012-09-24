@@ -22,22 +22,24 @@
 
 from mako.filters import url_escape
 from pylons import c, g, request
-from pylons.controllers.util import abort, redirect_to
+from pylons.controllers.util import redirect_to
 from pylons.i18n import _
 from pylons.i18n.translation import LanguageError
-from r2.lib.base import BaseController, proxyurl
 from r2.lib import pages, utils, filters, amqp, stats
-from r2.lib.utils import http_utils, is_subdomain, UniqueIterator
+from r2.lib.utils import http_utils, is_subdomain, UniqueIterator, is_throttled
 from r2.lib.cache import LocalCache, make_key, MemcachedError
 import random as rand
-from r2.models.account import valid_cookie, FakeAccount, valid_feed, valid_admin_cookie
+from r2.models.account import FakeAccount, valid_feed, valid_admin_cookie
 from r2.models.subreddit import Subreddit, Frontpage
 from r2.models import *
-from errors import ErrorSet
+from errors import ErrorSet, ForbiddenError, errors
 from validator import *
 from r2.lib.template_helpers import add_sr
 from r2.config.extensions import is_api
 from r2.lib.translation import set_lang
+from r2.lib.contrib import ipaddress
+from r2.lib.base import BaseController, proxyurl, abort
+from r2.lib.authentication import authenticate_user
 
 from Cookie import CookieError
 from copy import copy
@@ -63,10 +65,13 @@ class Cookies(dict):
         self[name] = Cookie(value, *k, **kw)
 
 class Cookie(object):
-    def __init__(self, value, expires = None, domain = None, dirty = True):
+    def __init__(self, value, expires=None, domain=None,
+                 dirty=True, secure=False, httponly=False):
         self.value = value
         self.expires = expires
         self.dirty = dirty
+        self.secure = secure
+        self.httponly = httponly
         if domain:
             self.domain = domain
         elif c.authorized_cname and not c.default_sr:
@@ -147,9 +152,10 @@ def read_user_cookie(name):
     else:
         return ''
 
-def set_user_cookie(name, val):
+def set_user_cookie(name, val, **kwargs):
     uname = c.user.name if c.user_is_loggedin else ""
-    c.cookies[uname + '_' + name] = Cookie(value = val)
+    c.cookies[uname + '_' + name] = Cookie(value=val,
+                                           **kwargs)
 
     
 valid_click_cookie = fullname_regex(Link, True).match
@@ -163,8 +169,8 @@ def set_recent_clicks():
         if valid_click_cookie(click_cookie):
             names = [ x for x in UniqueIterator(click_cookie.split(',')) if x ]
 
-            if len(click_cookie) > 1000:
-                names = names[:20]
+            if len(names) > 5:
+                names = names[:5]
                 set_user_cookie('recentclicks2', ','.join(names))
             #eventually this will look at the user preference
             names = names[:5]
@@ -460,12 +466,9 @@ def ratelimit_agents():
         if s and user_agent and s in user_agent:
             ratelimit_agent(s)
 
-def throttled(key):
-    return g.cache.get("throttle_" + key)
-
 def ratelimit_throttled():
     ip = request.ip.strip()
-    if throttled(ip):
+    if is_throttled(ip):
         abort(429)
 
 
@@ -543,7 +546,7 @@ def cross_domain(origin_check=is_trusted_origin, **options):
 
 def require_https():
     if not c.secure:
-        abort(403)
+        abort(ForbiddenError(errors.HTTPS_REQUIRED))
 
 def prevent_framing_and_css(allow_cname_frame=False):
     def wrap(f):
@@ -600,7 +603,9 @@ class MinimalController(BaseController):
             ratelimit_agents()
 
         c.allow_loggedin_cache = False
-
+        
+        c.show_wiki_actions = False
+        
         # the domain has to be set before Cookies get initialized
         set_subreddit()
         c.errors = ErrorSet()
@@ -626,7 +631,9 @@ class MinimalController(BaseController):
                                             value   = cookie.value,
                                             domain  = cookie.get('domain',None),
                                             expires = cookie.get('expires',None),
-                                            path    = cookie.get('path',None))
+                                            path    = cookie.get('path',None),
+                                            secure  = cookie.get('secure', False),
+                                            httponly = cookie.get('httponly', False))
 
                 response.status_code = r.status_code
                 request.environ['pylons.routes_dict']['action'] = 'cached_response'
@@ -677,9 +684,16 @@ class MinimalController(BaseController):
                 response.set_cookie(key     = k,
                                     value   = quote(v.value),
                                     domain  = v.domain,
-                                    expires = v.expires)
+                                    expires = v.expires,
+                                    secure  = getattr(v, 'secure', False),
+                                    httponly = getattr(v, 'httponly', False))
 
         end_time = datetime.now(g.tz)
+
+        # update last_visit
+        if (c.user_is_loggedin and not g.disallow_db_writes and
+            request.path != '/validuser'):
+            c.user.update_last_visit(c.start_time)
 
         if ('pylons.routes_dict' in request.environ and
             'action' in request.environ['pylons.routes_dict']):
@@ -758,6 +772,16 @@ class MinimalController(BaseController):
         c.response.content = filters.websafe_json(data)
         return c.response
 
+    def iframe_api_wrapper(self, kw):
+        data = simplejson.dumps(kw)
+        c.response_content_type = 'text/html'
+        c.response.content = (
+            '<html><head><script type="text/javascript">\n'
+            'parent.$.handleResponse().call('
+            'parent.$("#" + window.frameElement.id).parent(), %s)\n'
+            '</script></head></html>') % filters.websafe_json(data)
+        return c.response
+
 
 class RedditController(MinimalController):
 
@@ -774,6 +798,17 @@ class RedditController(MinimalController):
     def enable_admin_mode(user, first_login=None):
         # no expiration time so the cookie dies with the browser session
         c.cookies[g.admin_cookie] = Cookie(value=user.make_admin_cookie(first_login=first_login))
+
+    @staticmethod
+    def remember_otp(user):
+        cookie = user.make_otp_cookie()
+        expiration = datetime.utcnow() + timedelta(seconds=g.OTP_COOKIE_TTL)
+        expiration = expiration.strftime("%a, %d %b %Y %H:%M:%S GMT")
+        set_user_cookie(g.otp_cookie,
+                        cookie,
+                        secure=True,
+                        httponly=True,
+                        expires=expiration)
 
     @staticmethod
     def disable_admin_mode(user):
@@ -802,15 +837,12 @@ class RedditController(MinimalController):
 
         # the user could have been logged in via one of the feeds 
         maybe_admin = False
+        is_otpcookie_valid = False
 
         # no logins for RSS feed unless valid_feed has already been called
         if not c.user:
             if c.extension != "rss":
-                session_cookie = c.cookies.get(g.login_cookie)
-                if session_cookie:
-                    c.user = valid_cookie(session_cookie.value)
-                    if c.user:
-                        c.user_is_loggedin = True
+                authenticate_user()
 
                 admin_cookie = c.cookies.get(g.admin_cookie)
                 if c.user_is_loggedin and admin_cookie:
@@ -820,6 +852,10 @@ class RedditController(MinimalController):
                         self.enable_admin_mode(c.user, first_login=first_login)
                     else:
                         self.disable_admin_mode(c.user)
+
+                otp_cookie = read_user_cookie(g.otp_cookie)
+                if c.user_is_loggedin and otp_cookie:
+                    is_otpcookie_valid = valid_otp_cookie(otp_cookie)
 
             if not c.user:
                 c.user = UnloggedUser(get_browser_langs())
@@ -843,8 +879,9 @@ class RedditController(MinimalController):
             c.user_is_admin = maybe_admin and c.user.name in g.admins
             c.user_special_distinguish = c.user.special_distinguish()
             c.user_is_sponsor = c.user_is_admin or c.user.name in g.sponsors
-            if request.path != '/validuser' and not g.disallow_db_writes:
-                c.user.update_last_visit(c.start_time)
+            c.otp_cached = is_otpcookie_valid
+            if not isinstance(c.site, FakeSubreddit) and not g.disallow_db_writes:
+                c.user.update_sr_activity(c.site)
 
         c.over18 = over18()
         set_obey_over18()
@@ -891,9 +928,11 @@ class RedditController(MinimalController):
 
             # check if the user has access to this subreddit
             if not c.site.can_view(c.user) and not c.error_page:
+                public_description = c.site.public_description
                 errpage = pages.RedditError(strings.private_subreddit_title,
                                             strings.private_subreddit_message,
-                                            image="subreddit-private.png")
+                                            image="subreddit-private.png",
+                                            sr_description=public_description)
                 request.environ['usable_error_content'] = errpage.render()
                 self.abort403()
 

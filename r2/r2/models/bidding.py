@@ -31,6 +31,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from pylons import g
 from r2.lib.utils import Enum
 from r2.models.account import Account
+from r2.models import Link
 from r2.lib.db.thing import Thing, NotFound
 from pylons import request
 from r2.lib.memoize import memoize
@@ -423,7 +424,6 @@ class PromoteDates(Sessionized, Base):
     @classmethod
     @memoize('promodates.bid_history', time = 10 * 60)
     def bid_history(cls, start_date, end_date = None, account_id = None):
-
         end_date = end_date or datetime.datetime.now(g.tz)
         q = cls.for_date_range(start_date, end_date, account_id = account_id)
 
@@ -536,7 +536,7 @@ class PromotionWeights(Sessionized, Base):
         q = q.filter(and_(cls.date >= start_date, cls.date < end_date))
 
         if author_id is not None:
-            q.filter(author_id = author_id)
+            q = q.filter(cls.account_id == author_id)
 
         res = {}
         for x in q.all():
@@ -547,8 +547,12 @@ class PromotionWeights(Sessionized, Base):
     @classmethod
     @memoize('promodates.bid_history', time = 10 * 60)
     def bid_history(cls, start_date, end_date = None, account_id = None):
-        from r2.models import Link
         from r2.lib import promote
+        from r2.models import PromoCampaign
+        
+        if not end_date:
+            end_date = datetime.datetime.now(g.tz)
+        
         start_date = to_date(start_date)
         end_date   = to_date(end_date)
         q = cls.query()
@@ -565,10 +569,18 @@ class PromotionWeights(Sessionized, Base):
             for i in q:
                 if d == i.date:
                     l = links[i.thing_name]
-                    if not promote.is_rejected(l) and not promote.is_unpaid(l) and not l._deleted:
-                        camp = l.campaigns[i.promo_idx]
-                        bid += i.bid
-                        refund += i.bid if camp[-1] <= 0 else 0
+                    if (not promote.is_rejected(l) and 
+                        not promote.is_unpaid(l) and 
+                        not l._deleted):
+
+                        try:
+                            camp = PromoCampaign._byID(i.promo_idx, data=True)
+                            bid += i.bid
+                            refund += i.bid if camp.is_freebie() else 0
+                        except NotFound:
+                            g.log.error("Skipping missing PromoCampaign in "
+                                        "bidding.bid_history, campaign id: %d" 
+                                        % i.promo_idx)
             res.append([d, bid, refund])
             d += datetime.timedelta(1)
         return res

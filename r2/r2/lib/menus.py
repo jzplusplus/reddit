@@ -92,7 +92,6 @@ menu =   MenuHandler(hot          = _('hot'),
                      
                      #reddit footer strings
                      feedback     = _("contact us"),
-                     socialite    = _("firefox extension"),
                      buttons      = _("buttons"),
                      widget       = _("widget"), 
                      code         = _("source code"),
@@ -102,13 +101,16 @@ menu =   MenuHandler(hot          = _('hot'),
                      gold         = _('reddit gold'),
                      reddits      = _('subreddits'),
                      team         = _('team'),
+                     rules        = _('rules'),
 
                      #preferences
                      options      = _('options'),
+                     apps         = _("apps"),
                      feeds        = _("RSS feeds"),
                      friends      = _("friends"),
                      update       = _("password/email"),
                      delete       = _("delete"),
+                     otp          = _("two-factor authentication"),
 
                      # messages
                      compose      = _("compose"),
@@ -135,6 +137,13 @@ menu =   MenuHandler(hot          = _('hot'),
                      flair        = _("edit flair"),
                      log          = _("moderation log"),
                      modqueue     = _("moderation queue"),
+                     unmoderated  = _("unmoderated links"),
+                     
+                     wikibanned        = _("ban wiki contributors"),
+                     wikicontributors  = _("add wiki contributors"),
+                     
+                     wikirecentrevisions = _("recent wiki revisions"),
+                     wikipageslist = _("wiki page list"),
 
                      popular      = _("popular"),
                      create       = _("create"),
@@ -171,6 +180,10 @@ menu =   MenuHandler(hot          = _('hot'),
                      unpaid_promos  = _('unpaid'),
                      pending_promos = _('pending'),
                      rejected_promos = _('rejected'),
+
+                     sitewide = _('sitewide'),
+                     languages = _('languages'),
+                     adverts = _('adverts'),
 
                      whitelist = _("whitelist")
                      )
@@ -332,11 +345,11 @@ class SubredditButton(NavButton):
     # TRANSLATORS: This refers to the user's front page
                       Frontpage: _("front")}
 
-    def __init__(self, sr):
+    def __init__(self, sr, **kw):
         self.path = sr.path
         name = self.name_overrides.get(sr, sr.name)
         NavButton.__init__(self, name, sr.path, False,
-                           isselected = (c.site == sr))
+                           isselected = (c.site == sr), **kw)
 
     def build(self, base_path = ''):
         pass
@@ -454,7 +467,7 @@ class ProfileSortMenu(SortMenu):
 class CommentSortMenu(SortMenu):
     """Sort menu for comments pages"""
     default   = 'confidence'
-    options   = ('hot', 'new', 'controversial', 'top', 'old', 'confidence')
+    options   = ('confidence', 'top', 'new', 'hot', 'controversial', 'old')
     use_post  = True
 
 class SearchSortMenu(SortMenu):

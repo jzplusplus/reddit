@@ -21,7 +21,7 @@
 ###############################################################################
 
 from r2.models import *
-from filters import unsafe, websafe, _force_unicode
+from filters import unsafe, websafe, _force_unicode, _force_utf8
 from r2.lib.utils import vote_hash, UrlParser, timesince, is_subdomain
 
 from r2.lib.media import s3_direct_url
@@ -33,6 +33,7 @@ import os.path
 from copy import copy
 import random
 import urlparse
+import calendar
 from pylons import g, c
 from pylons.i18n import _, ungettext
 from paste.util.mimeparse import desired_matches
@@ -119,8 +120,6 @@ def js_config():
         "post_site": c.site.name if not c.default_sr else "",
         # are we in an iframe?
         "cnameframe": bool(c.cname and not c.authorized_cname),
-        # this page's referer
-        "referer": _force_unicode(request.referer) or "",
         # the user's voting hash
         "modhash": c.modhash or False,
         # the current rendering style
@@ -144,6 +143,7 @@ def js_config():
         "tracking_domain": g.tracking_domain,
         "adtracker_url": g.adtracker_url,
         "clicktracker_url": g.clicktracker_url,
+        "uitracker_url": g.uitracker_url,
         "static_root": static(''),
     }
     return config
@@ -513,8 +513,32 @@ def add_attr(attrs, kind, label=None, link=None, cssclass=None, symbol=None):
     attrs.append( (priority, symbol, cssclass, label, link, img) )
 
 
+def search_url(query, subreddit, restrict_sr="off", sort=None):
+    import urllib
+    query = _force_utf8(query)
+    url_query = {"q": query}
+    if restrict_sr:
+        url_query["restrict_sr"] = restrict_sr
+    if sort:
+        url_query["sort"] = sort
+    path = "/r/%s/search?" % subreddit if subreddit else "/search?"
+    path += urllib.urlencode(url_query)
+    return path
+
+
 def format_number(number, locale=None):
     if not locale:
         locale = c.locale
 
     return babel.numbers.format_number(number, locale=locale)
+
+
+def html_datetime(date):
+    # Strip off the microsecond to appease the HTML5 gods, since
+    # datetime.isoformat() returns too long of a microsecond value.
+    # http://www.whatwg.org/specs/web-apps/current-work/multipage/common-microsyntaxes.html#times
+    return date.replace(microsecond=0).isoformat()
+
+
+def js_timestamp(date):
+    return '%d' % (calendar.timegm(date.timetuple()) * 1000)

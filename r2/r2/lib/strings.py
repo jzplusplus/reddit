@@ -170,7 +170,31 @@ string_dict = dict(
     unvotable_message = _("sorry, this has been archived and can no longer be voted on"),
     account_activity_blurb = _("This page shows a history of recent activity on your account. If you notice unusual activity, you should change your password immediately. Location information is guessed from your computer's IP address and may be wildly wrong, especially for visits from mobile devices. Note: due to a bug, private-use addresses (starting with 10.) sometimes show up erroneously in this list after regular use of the site."),
     your_current_ip_is = _("You are currently accessing reddit from this IP address: %(address)s."),
+    account_activity_apps_blurb = _("""
+These apps are authorized to access your account. Logging out of all sessions
+will revoke access from all apps. You may also revoke access from individual
+apps below.
+"""),
 
+    traffic_promoted_link_explanation = _("Below you will see your promotion's impression and click traffic per hour of promotion.  Please note that these traffic totals will lag behind by two to three hours, and that daily totals will be preliminary until 24 hours after the link has finished its run."),
+    traffic_processing_slow = _("Traffic processing is currently running slow. The latest data available is from %(date)s. This page will be updated as new data becomes available."),
+    traffic_processing_normal = _("Traffic processing occurs on an hourly basis. The latest data available is from %(date)s. This page will be updated as new data becomes available."),
+
+    traffic_subreddit_explanation = _("""
+Below are the traffic statistics for your subreddit. Each graph represents one of the following over the interval specified.
+
+* **pageviews** are all hits to %(subreddit)s, including both listing pages and comment pages.
+* **uniques** are the total number of unique visitors (determined by a combination of their IP address and User Agent string) that generate the above pageviews. This is independent of whether or not they are logged in.
+* **subscriptions** is the number of new subscriptions that have been generated in a given day. This number is less accurate than the first two metrics, as, though we can track new subscriptions, we have no way to track unsubscriptions.
+
+Note: there are a couple of places outside of your subreddit where someone can click "subscribe", so it is possible (though unlikely) that the subscription count can exceed the unique count on a given day.
+"""),
+
+    go = _("go"),
+    view_subreddit_traffic = _("view subreddit traffic"),
+
+    an_error_occurred = _("an error occurred"),
+    an_error_occurred_friendly = _("an error occurred. please try again later!"),
 )
 
 class StringHandler(object):
@@ -227,9 +251,14 @@ class PluralManager(object):
             self.string_dict[s] = self.string_dict[p] = (s, p)
 
     def __getattr__(self, attr):
+        to_func = False
         if attr.startswith("N_"):
-            a = attr[2:]
-            rval = self.string_dict[a]
+            attr = attr[2:]
+            to_func = True
+
+        attr = attr.replace("_", " ")
+        if to_func:
+            rval = self.string_dict[attr]
             return lambda x: ungettext(rval[0], rval[1], x)
         else:
             rval = self.string_dict[attr]
@@ -251,6 +280,7 @@ plurals = PluralManager([P_("comment",     "comments"),
                          P_("subscriber",  "subscribers"),
                          P_("approved submitter", "approved submitters"),
                          P_("moderator",   "moderators"),
+                         P_("user here now",   "users here now"),
 
                          # time words
                          P_("milliseconds","milliseconds"),
@@ -280,10 +310,10 @@ class Score(object):
                                             point=plurals.N_points(x))
 
     @staticmethod
-    def _people(x, label):
+    def _people(x, label, prepend=''):
+        num = prepend + babel.numbers.format_number(x, c.locale)
         return strings.person_label % \
-            dict(num = babel.numbers.format_number(x, c.locale),
-                 persons = label(x))
+            dict(num=num, persons=label(x))
 
     @staticmethod
     def subscribers(x):
@@ -298,6 +328,10 @@ class Score(object):
         p = plurals.string_dict[word]
         f = lambda x: ungettext(p[0], p[1], x)
         return strings.number_label % dict(num=x, thing=f(x))
+
+    @staticmethod
+    def users_here_now(x, prepend=''):
+        return Score._people(x, plurals.N_users_here_now, prepend=prepend)
 
     @staticmethod
     def none(x):
@@ -393,8 +427,18 @@ rand_strings.add('sadmessages',   "Funny 500 page message", 10)
 rand_strings.add('create_reddit', "Reason to create a reddit", 20)
 
 
-def print_rand_strings():
+def generate_strings():
+    """Print out automatically generated strings for translation."""
+
+    # used by error pages and in the sidebar for why to create a subreddit
     for name, rand_string in rand_strings:
         for string in rand_string:
             print "# TRANSLATORS: Do not translate literally. Come up with a funny/relevant phrase (see the English version for ideas)"
             print "print _('" + string + "')"
+
+    # these are used in r2.lib.pages.trafficpages
+    INTERVALS = ("hour", "day", "month")
+    TYPES = ("uniques", "pageviews", "traffic", "impressions", "clicks")
+    for interval in INTERVALS:
+        for type in TYPES:
+            print "print _('%s by %s')" % (type, interval)

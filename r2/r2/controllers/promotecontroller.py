@@ -25,6 +25,7 @@ from pylons.i18n import _
 from r2.models import *
 from r2.lib.authorize import get_account_info, edit_profile
 from r2.lib.pages import *
+from r2.lib.pages.trafficpages import TrafficViewerList
 from r2.lib.pages.things import wrap_links
 from r2.lib.strings import strings
 from r2.lib.menus import *
@@ -216,7 +217,6 @@ class PromoteController(ListingController):
 
             # comment disabling is free to be changed any time.
             l.disable_comments = disable_comments
-
             if c.user_is_sponsor or c.user.trusted_sponsor:
                 if media_embed and media_width and media_height:
                     l.media_object = dict(height = media_height,
@@ -227,8 +227,7 @@ class PromoteController(ListingController):
                     l.media_object = None
 
                 l.media_override = media_override
-
-                if getattr(link, "domain_override", False) or domain_override:
+                if getattr(l, "domain_override", False) or domain_override:
                     l.domain_override = domain_override
             l._commit()
 
@@ -283,7 +282,8 @@ class PromoteController(ListingController):
                                   business_days = False, 
                                   admin_override = True),
                    l     = VLink('link_id'),
-                   bid   = VBid('bid', 'link_id', 'sr'),
+                   bid   = VFloat('bid', min=0, max=g.max_promote_bid, 
+                                  coerce=False, error=errors.BAD_BID),
                    sr = VSubmitSR('sr', promotion=True),
                    indx = VInt("indx"), 
                    targeting = VLength("targeting", 10))
@@ -291,12 +291,14 @@ class PromoteController(ListingController):
                           dates, bid, sr, targeting):
         if not l:
             return
-
-        start, end = [x.date() for x in dates] if dates else (None, None)
+        
+        start, end = dates or (None, None)
 
         if start and end and not promote.is_accepted(l) and not c.user_is_sponsor:
             # if the ad is not approved already, ensure the start date
             # is at least 2 days in the future
+            start = start.date()
+            end = end.date()
             now = promote.promo_datetime_now()
             future = make_offset_date(now, g.min_promote_future,
                                       business_days = True)
@@ -317,10 +319,19 @@ class PromoteController(ListingController):
         if form.has_errors('bid', errors.BAD_BID):
             return
 
-        if bid is None or float(bid) / duration < g.min_promote_bid:
+        # minimum bid depends on user privilege and targeting, checked here
+        # instead of in the validator b/c current duration is needed
+        if c.user_is_admin:
+            min_daily_bid = 0
+        elif targeting == 'one':
+            min_daily_bid = g.min_promote_bid * 1.5
+        else:
+            min_daily_bid = g.min_promote_bid
+
+        if bid is None or bid / duration < min_daily_bid:
             c.errors.add(errors.BAD_BID, field = 'bid',
-                         msg_params = {"min": g.min_promote_bid,
-                                       "max": g.max_promote_bid})
+                         msg_params = {'min': min_daily_bid,
+                                       'max': g.max_promote_bid})
             form.has_errors('bid', errors.BAD_BID)
             return
 
@@ -332,7 +343,7 @@ class PromoteController(ListingController):
                 # check for rate-limiting if there's no subreddit
                 return
             oversold = promote.is_roadblocked(sr.name, start, end)
-            if oversold:
+            if oversold and not c.user_is_sponsor:
                 c.errors.add(errors.OVERSOLD, field = 'sr',
                              msg_params = {"start": oversold[0].strftime('%m/%d/%Y'),
                                            "end": oversold[1].strftime('%m/%d/%Y')})

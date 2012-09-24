@@ -57,7 +57,6 @@ def load_controllers():
     from front import FrontController
     from health import HealthController
     from buttons import ButtonsController
-    from buttons import ButtonjsController
     from captcha import CaptchaController
     from embed import EmbedController
     from error import ErrorController
@@ -70,20 +69,18 @@ def load_controllers():
     from promotecontroller import PromoteController
     from mediaembed import MediaembedController
     from mediaembed import AdController
+    
+    from wiki import WikiController
+    from wiki import WikiApiController
 
     from querycontroller import QueryController
 
-    try:
-        from r2admin.controllers.adminapi import ApiController
-    except ImportError:
-        from api import ApiController
-
+    from api import ApiController
     from api import ApiminimalController
     from api_docs import ApidocsController
     from apiv1 import APIv1Controller
     from oauth2 import OAuth2FrontendController
     from oauth2 import OAuth2AccessController
-    from admin import AdminController
     from redirect import RedirectController
     from ipn import IpnController
 

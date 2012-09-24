@@ -24,10 +24,11 @@ from r2.lib.wrapped import Wrapped, Templated, CachedTemplate
 from r2.models import Account, FakeAccount, DefaultSR, make_feedurl
 from r2.models import FakeSubreddit, Subreddit, Ad, AdSR, SubSR
 from r2.models import Friends, All, Sub, NotFound, DomainSR, Random, Mod, RandomNSFW, MultiReddit, ModSR, Frontpage
-from r2.models import Link, Printable, Trophy, bidding, PromotionWeights, Comment
+from r2.models import Link, Printable, Trophy, bidding, PromoCampaign, PromotionWeights, Comment
 from r2.models import Flair, FlairTemplate, FlairTemplateBySubredditIndex
 from r2.models import USER_FLAIR, LINK_FLAIR
-from r2.models.oauth2 import OAuth2Client
+from r2.models.token import OAuth2Client
+from r2.models import traffic
 from r2.models import ModAction
 from r2.models import Thing
 from r2.config import cache
@@ -39,8 +40,8 @@ from pylons.i18n import _, ungettext
 from pylons import c, request, g
 from pylons.controllers.util import abort
 
+from r2.lib import media
 from r2.lib import promote
-from r2.lib.traffic import load_traffic, load_summary
 from r2.lib.captcha import get_iden
 from r2.lib.filters import spaceCompress, _force_unicode, _force_utf8
 from r2.lib.filters import unsafe, websafe, SC_ON, SC_OFF, websafe_json
@@ -49,7 +50,7 @@ from r2.lib.menus import SubredditButton, SubredditMenu, ModeratorMailButton
 from r2.lib.menus import OffsiteButton, menu, JsNavMenu
 from r2.lib.strings import plurals, rand_strings, strings, Score
 from r2.lib.utils import title_to_url, query_string, UrlParser, to_js, vote_hash
-from r2.lib.utils import link_duplicates, make_offset_date, to_csv, median, to36
+from r2.lib.utils import link_duplicates, make_offset_date, median, to36
 from r2.lib.utils import trunc_time, timesince, timeuntil
 from r2.lib.template_helpers import add_sr, get_domain, format_number
 from r2.lib.subreddit_search import popular_searches
@@ -60,7 +61,7 @@ from r2.lib.utils import trunc_string as _truncate
 from r2.lib.filters import safemarkdown
 
 import sys, random, datetime, calendar, simplejson, re, time
-import graph, pycountry, time
+import pycountry, time
 from itertools import chain
 from urllib import quote
 
@@ -190,7 +191,33 @@ class Reddit(Templated):
             self._content = content
 
         self.toolbars = self.build_toolbars()
-
+    
+    def wiki_actions_menu(self, moderator=False):
+        buttons = []
+        
+        buttons.append(NamedButton("wikirecentrevisions", 
+                                   css_class="wikiaction-revisions",
+                                   dest="/wiki/revisions"))
+        
+        buttons.append(NamedButton("wikipageslist", 
+                           css_class="wikiaction-pages",
+                           dest="/wiki/pages"))
+        if moderator:
+            buttons += [NamedButton('wikibanned', css_class='reddit-ban', 
+                                    dest='/about/wikibanned'),
+                        NamedButton('wikicontributors', 
+                                    css_class='reddit-contributors', 
+                                    dest='/about/wikicontributors')
+                        ]
+                           
+        return SideContentBox(_('wiki tools'),
+                      [NavMenu(buttons,
+                               type="flat_vert",
+                               css_class="icon-menu",
+                               separator="")],
+                      _id="wikiactions",
+                      collapsible=True)
+    
     def sr_admin_menu(self):
         buttons = []
         is_single_subreddit = not isinstance(c.site, (ModSR, MultiReddit))
@@ -226,7 +253,8 @@ class Reddit(Templated):
             buttons += [NamedButton("banned", css_class="reddit-ban"),
                         NamedButton("flair", css_class="reddit-flair")]
 
-        buttons.append(NamedButton("log", css_class="reddit-moderationlog"))
+        buttons += [NamedButton("log", css_class="reddit-moderationlog"),
+                    NamedButton("unmoderated", css_class="reddit-unmoderated")]
 
         return SideContentBox(_('moderation tools'),
                               [NavMenu(buttons,
@@ -261,7 +289,6 @@ class Reddit(Templated):
         if isinstance(c.site, (MultiReddit, ModSR)) and c.user_is_loggedin:
             srs = Subreddit._byID(c.site.sr_ids,data=True,
                                   return_dict=False)
-
             if c.user_is_admin or c.site.is_moderator(c.user):
                 ps.append(self.sr_admin_menu())
 
@@ -271,12 +298,17 @@ class Reddit(Templated):
         # don't show the subreddit info bar on cnames unless the option is set
         if not isinstance(c.site, FakeSubreddit) and (not c.cname or c.site.show_cname_sidebar):
             ps.append(SubredditInfoBar())
-            if c.user_is_loggedin and (c.user_is_admin or
-                                       c.site.is_moderator(c.user)):
+            moderator = c.user_is_loggedin and (c.user_is_admin or 
+                                          c.site.is_moderator(c.user))
+            if c.show_wiki_actions:
+                ps.append(self.wiki_actions_menu(moderator=moderator))
+            if moderator:
                 ps.append(self.sr_admin_menu())
             if (c.user.pref_show_adbox or not c.user.gold) and not g.disable_ads:
                 ps.append(Ads())
             no_ads_yet = False
+        elif c.show_wiki_actions:
+            ps.append(self.wiki_actions_menu())
 
         user_banned = c.user_is_loggedin and c.site.is_banned(c.user)
         if self.submit_box and (c.user_is_loggedin or not g.read_only_mode) and not user_banned:
@@ -387,6 +419,13 @@ class Reddit(Templated):
             if c.user_is_loggedin:
                 main_buttons.append(NamedButton('saved', False))
 
+            mod = False
+            if c.user_is_loggedin:
+                mod = bool(c.user_is_admin or c.site.is_moderator(c.user))
+            if c.site._should_wiki and (c.site.wikimode != 'disabled' or mod):
+                if not g.wiki_disabled:
+                    main_buttons.append(NavButton('wiki', 'wiki'))
+
         more_buttons = []
 
         if c.user_is_loggedin:
@@ -430,12 +469,13 @@ class Reddit(Templated):
             if not isinstance(c.site, FakeSubreddit):
                 if c.site.is_subscriber(c.user):
                     classes.add('subscriber')
-                if c.site.is_moderator(c.user):
-                    classes.add('moderator')
                 if c.site.is_contributor(c.user):
                     classes.add('contributor')
                 if c.cname:
                     classes.add('cname')
+            if c.site.is_moderator(c.user):
+                classes.add('moderator')
+
         if isinstance(c.site, MultiReddit):
             classes.add('multi-page')
 
@@ -476,7 +516,7 @@ class RedditFooter(CachedTemplate):
                     NamedButton("help", False, nocname=True),
                     OffsiteButton(_("FAQ"), dest = "/help/faq", nocname=True),
                     OffsiteButton(_("reddiquette"), nocname=True, dest = "/help/reddiquette"),
-                    NamedButton("reddits", False, nocname=True),
+                    NamedButton("rules", False, nocname=True),
                     NamedButton("feedback", False),
                 ],
                 title = _("help"),
@@ -485,7 +525,7 @@ class RedditFooter(CachedTemplate):
 
             NavMenu([
                     OffsiteButton("mobile", "http://i.reddit.com"),
-                    NamedButton("socialite", False),
+                    OffsiteButton(_("firefox extension"), "https://addons.mozilla.org/firefox/addon/socialite/"),
                     OffsiteButton(_("chrome extension"), "https://chrome.google.com/webstore/detail/algjnflpgoopkdijmkalfcifomdhmcbe"),
                     NamedButton("buttons", True),
                     NamedButton("widget", True),
@@ -557,6 +597,8 @@ class SubredditInfoBar(CachedTemplate):
         # so the menus cache properly
         self.path = request.path
 
+        self.accounts_active, self.accounts_active_fuzzed = self.sr.get_accounts_active()
+
         if c.user_is_loggedin and c.user.pref_show_flair:
             self.flair_prefs = FlairPrefs()
         else:
@@ -618,13 +660,18 @@ class PrefsPage(Reddit):
                         *a, **kw)
 
     def build_toolbars(self):
-        buttons = [NavButton(menu.options, '')]
+        buttons = [NavButton(menu.options, ''),
+                   NamedButton('apps')]
 
         if c.user.pref_private_feeds:
             buttons.append(NamedButton('feeds'))
 
         buttons.extend([NamedButton('friends'),
                         NamedButton('update')])
+
+        if c.user_is_loggedin and c.user.name in g.admins:
+            buttons += [NamedButton('otp')]
+
         #if CustomerID.get_id(user):
         #    buttons += [NamedButton('payment')]
         buttons += [NamedButton('delete')]
@@ -639,6 +686,9 @@ class PrefOptions(Templated):
 class PrefFeeds(Templated):
     pass
 
+class PrefOTP(Templated):
+    pass
+
 class PrefUpdate(Templated):
     """Preference form for updating email address and passwords"""
     def __init__(self, email = True, password = True, verify = False):
@@ -647,8 +697,18 @@ class PrefUpdate(Templated):
         self.verify = verify
         Templated.__init__(self)
 
+class PrefApps(Templated):
+    """Preference form for managing authorized third-party applications."""
+
+    def __init__(self, my_apps, developed_apps):
+        from r2.controllers.oauth2 import scope_info
+        self.my_apps = [(app, [scope_info[scope] for scope in scopes])
+                        for app, scopes in my_apps]
+        self.developed_apps = developed_apps
+        super(PrefApps, self).__init__()
+
 class PrefDelete(Templated):
-    """preference form for deleting a user's own account."""
+    """Preference form for deleting a user's own account."""
     pass
 
 
@@ -805,10 +865,12 @@ class Register(Login):
     pass
 
 class OAuth2AuthorizationPage(BoringPage):
-    def __init__(self, client, redirect_uri, scope, state):
+    def __init__(self, client, redirect_uri, scopes, state):
+        from r2.controllers.oauth2 import scope_info
+        scope_details = [scope_info[scope] for scope in scopes]
         content = OAuth2Authorization(client=client,
                                       redirect_uri=redirect_uri,
-                                      scope=scope,
+                                      scope_details=scope_details,
                                       state=state)
         BoringPage.__init__(self, _("request for permission"),
                 show_sidebar=False, content=content)
@@ -822,9 +884,9 @@ class SearchPage(BoringPage):
     extra_page_classes = ['search-page']
 
     def __init__(self, pagename, prev_search, elapsed_time,
-                 num_results, search_params = {},
-                 simple=False, restrict_sr = False, site=None,
-                 syntax=None, converted_data=None,
+                 num_results, search_params={},
+                 simple=False, restrict_sr=False, site=None,
+                 syntax=None, converted_data=None, facets={}, sort=None,
                  *a, **kw):
         self.searchbar = SearchBar(prev_search=prev_search,
                                    elapsed_time=elapsed_time,
@@ -832,7 +894,8 @@ class SearchPage(BoringPage):
                                    search_params=search_params,
                                    show_feedback=True, site=site,
                                    simple=simple, restrict_sr=restrict_sr,
-                                   syntax=syntax, converted_data=converted_data)
+                                   syntax=syntax, converted_data=converted_data,
+                                   facets=facets, sort=sort)
         BoringPage.__init__(self, pagename, robots='noindex', *a, **kw)
 
     def content(self):
@@ -1024,6 +1087,11 @@ class CommentPane(Templated):
         self.can_reply = False
         if c.user_is_admin:
             try_cache = False
+
+        # don't cache if the current user is the author of the link
+        if c.user_is_loggedin and c.user._id == article.author_id:
+            try_cache = False
+
         if try_cache and c.user_is_loggedin:
             sr = article.subreddit_slow
             c.can_reply = self.can_reply = sr.can_comment(c.user)
@@ -1066,7 +1134,8 @@ class CommentPane(Templated):
 
                     # render as if not logged in (but possibly with reply buttons)
                     self.rendered = renderer().render()
-                    g.cache.set(key, self.rendered, time = 120)
+                    g.cache.set(key, self.rendered,
+                                time=g.commentpane_cache_time)
 
                 finally:
                     # undo the spoofing
@@ -1148,19 +1217,21 @@ class SubredditsPage(Reddit):
     searchbox    = False
     submit_box   = False
     def __init__(self, prev_search = '', num_results = 0, elapsed_time = 0,
-                 title = '', loginbox = True, infotext = None,
+                 title = '', loginbox = True, infotext = None, show_interestbar=False,
                  search_params = {}, *a, **kw):
         Reddit.__init__(self, title = title, loginbox = loginbox, infotext = infotext,
                         *a, **kw)
         self.searchbar = SearchBar(prev_search = prev_search,
                                    elapsed_time = elapsed_time,
                                    num_results = num_results,
-                                   header = _('search reddits'),
+                                   header = _('search subreddits by name'),
                                    search_params = {},
                                    simple=True,
                                    subreddit_search=True
                                    )
         self.sr_infobar = InfoBar(message = strings.sr_subscribe)
+
+        self.interestbar = InterestBar(True) if show_interestbar else None
 
     def build_toolbars(self):
         buttons =  [NavButton(menu.popular, ""),
@@ -1179,8 +1250,9 @@ class SubredditsPage(Reddit):
                 NavMenu(buttons, base_path = '/reddits', type="tabmenu")]
 
     def content(self):
-        return self.content_stack((self.searchbar, self.nav_menu,
-                                   self.sr_infobar, self._content))
+        return self.content_stack((self.interestbar, self.searchbar,
+                                   self.nav_menu, self.sr_infobar,
+                                   self._content))
 
     def rightbox(self):
         ps = Reddit.rightbox(self)
@@ -1354,21 +1426,32 @@ class ClientInfoBar(InfoBar):
 
 class RedditError(BoringPage):
     site_tracking = False
-    def __init__(self, title, message, image=None):
+    def __init__(self, title, message, image=None, sr_description=None,
+                 explanation=None):
         BoringPage.__init__(self, title, loginbox=False,
-                            show_sidebar = False,
+                            show_sidebar = False, 
                             content=ErrorPage(title=title,
                                               message=message,
-                                              image=image))
+                                              image=image,
+                                              sr_description=sr_description,
+                                              explanation=explanation))
 
 class ErrorPage(Templated):
     """Wrapper for an error message"""
-    def __init__(self, title, message, image=None):
+    def __init__(self, title, message, image=None, explanation=None, **kwargs):
         if not image:
             letter = random.choice(['a', 'b', 'c', 'd', 'e'])
             image = 'reddit404' + letter + '.png'
-        Templated.__init__(self, title=title, message=message, image_url=image)
-    
+        # Normalize explanation strings.
+        if explanation:
+            explanation = explanation.lower().rstrip('.') + '.'
+        Templated.__init__(self,
+                           title=title,
+                           message=message,
+                           image_url=image,
+                           explanation=explanation,
+                           **kwargs)
+
 
 class Over18(Templated):
     """The creepy 'over 18' check page for nsfw content."""
@@ -1442,6 +1525,7 @@ class SubredditTopBar(CachedTemplate):
                        css_class = 'sr-bar', _id = 'sr-bar')
 
     def special_reddits(self):
+        css_classes = {Random: "random"}
         reddits = [Frontpage, All, Random]
         if getattr(c.site, "over_18", False):
             reddits.append(RandomNSFW)
@@ -1450,7 +1534,8 @@ class SubredditTopBar(CachedTemplate):
                 reddits.append(Friends)
             if c.show_mod_mail:
                 reddits.append(Mod)
-        return NavMenu([SubredditButton(sr) for sr in reddits],
+        return NavMenu([SubredditButton(sr, css_class=css_classes.get(sr))
+                        for sr in reddits],
                        type = 'flatlist', separator = '-',
                        css_class = 'sr-bar')
     
@@ -1746,7 +1831,8 @@ class SearchBar(Templated):
     def __init__(self, header=None, num_results=0, prev_search='',
                  elapsed_time=0, search_params={}, show_feedback=False,
                  simple=False, restrict_sr=False, site=None, syntax=None,
-                 subreddit_search=False, converted_data=None, **kw):
+                 subreddit_search=False, converted_data=None, facets={}, 
+                 sort=None, **kw):
         if header is None:
             header = _("previous search")
         self.header = header
@@ -1765,7 +1851,8 @@ class SearchBar(Templated):
                            simple=simple, restrict_sr=restrict_sr,
                            site=site, syntax=syntax,
                            converted_data=converted_data,
-                           subreddit_search=subreddit_search)
+                           subreddit_search=subreddit_search, facets=facets,
+                           sort=sort)
 
 class Frame(Wrapped):
     """Frameset for the FrameToolbar used when a user hits /tb/. The
@@ -1840,7 +1927,7 @@ class FrameToolbar(Wrapped):
 class NewLink(Templated):
     """Render the link submission form"""
     def __init__(self, captcha = None, url = '', title= '', text = '', selftext = '',
-                 subreddits = (), then = 'comments', resubmit=False):
+                 subreddits = (), then = 'comments', resubmit=False, never_show_self=False):
 
         self.show_link = self.show_self = False
 
@@ -1850,7 +1937,7 @@ class NewLink(Templated):
             self.show_link = True
         if c.default_sr or c.site.link_type != 'link':
             tabs.append(('text', ('text-desc', 'text-field')))
-            self.show_self = True
+            self.show_self = not never_show_self
 
         if self.show_self and self.show_link:
             all_fields = set(chain(*(parts for (tab, parts) in tabs)))
@@ -1909,21 +1996,6 @@ class OptIn(Templated):
     pass
 
 
-class ButtonEmbed(CachedTemplate):
-    """Generates the JS wrapper around the buttons for embedding."""
-    def __init__(self, button = None, width = 100,
-                 height=100, referer = "", url = "", **kw):
-        arg = "cnameframe=1&" if c.cname else ""
-        sr = c.site.name if not isinstance(c.site, FakeSubreddit) else ""
-        if sr:
-            arg += "sr=%s&" % sr
-        Templated.__init__(self, button = button,
-                           width = width, height = height,
-                           referer=referer, url = url,
-                           domain = get_domain(subreddit = False),
-                           arg = arg,
-                           **kw)
-
 class Button(Wrapped):
     cachable = True
     extension_handling = False
@@ -1953,18 +2025,9 @@ class ButtonLite(Button):
     def render(self, *a, **kw):
         return Wrapped.render(self, *a, **kw)
 
-class ButtonNoBody(Button):
-    """A button page that just returns the raw button for direct embeding"""
-    pass
-
 class ButtonDemoPanel(Templated):
     """The page for showing the different styles of embedable voting buttons"""
     pass
-
-class UpgradeButtons(Templated):
-    """The page for showing the different styles of embedable voting buttons"""
-    pass
-
 
 class SelfServeBlurb(Templated):
     pass
@@ -2893,32 +2956,28 @@ class BannedList(UserList):
 
     def user_ids(self):
         return c.site.banned
+ 
+class WikiBannedList(BannedList):
+    """List of users banned from editing a given wiki"""
+    type = 'wikibanned'
 
-class TrafficViewerList(UserList):
-    """Traffic share list on /traffic/*"""
-    destination = "traffic_viewer"
-    remove_action = "rm_traffic_viewer"
-    type = 'traffic'
+    def user_ids(self):
+        return c.site.wikibanned
 
-    def __init__(self, link, editable = True):
-        self.link = link
-        UserList.__init__(self, editable = editable)
+class WikiMayContributeList(UserList):
+    """List of users allowed to contribute to a given wiki"""
+    type = 'wikicontributor'
 
     @property
     def form_title(self):
-        return _('share traffic')
+        return _('add a wiki contributor')
 
     @property
     def table_title(self):
-        return _('current viewers')
+        return _('wiki page contributors')
 
     def user_ids(self):
-        return promote.traffic_viewers(self.link)
-
-    @property
-    def container_name(self):
-        return self.link._fullname
-
+        return c.site.wikicontributor
 
 
 class DetailsPage(LinkInfoPage):
@@ -2926,11 +2985,17 @@ class DetailsPage(LinkInfoPage):
 
     def __init__(self, thing, *args, **kwargs):
         from admin_pages import Details
+        after = kwargs.pop('after', None)
+        reverse = kwargs.pop('reverse', False)
+        count = kwargs.pop('count', None)
+
+        if isinstance(thing, (Link, Comment)):
+            details = Details(thing, after=after, reverse=reverse, count=count)
 
         if isinstance(thing, Link):
             link = thing
             comment = None
-            content = Details(thing=thing)
+            content = details
         elif isinstance(thing, Comment):
             comment = thing
             link = Link._byID(comment.link_id)
@@ -2939,7 +3004,7 @@ class DetailsPage(LinkInfoPage):
             content.append(LinkCommentSep())
             content.append(CommentPane(link, CommentSortMenu.operator('new'),
                                    comment, None, 1))
-            content.append(Details(thing=thing))
+            content.append(details)
 
         kwargs['content'] = content
         LinkInfoPage.__init__(self, link, comment, *args, **kwargs)
@@ -3040,9 +3105,12 @@ class PromoteLinkForm(Templated):
             self.now = promote.promo_datetime_now().date()
             start_date = promote.promo_datetime_now(offset = -14).date()
             end_date = promote.promo_datetime_now(offset = 14).date()
-            self.promo_traffic = dict(load_traffic('day', 'promos'))
+
+            self.promo_traffic = dict(promote.traffic_totals())
             self.market, self.promo_counter = \
                 Promote_Graph.get_market(None, start_date, end_date)
+
+        self.min_daily_bid = 0 if c.user_is_admin else g.min_promote_bid
 
         Templated.__init__(self, sr = sr, 
                            datefmt = datefmt,
@@ -3224,270 +3292,6 @@ class MediaEmbedBody(CachedTemplate):
         res = CachedTemplate.render(self, *a, **kw)
         return responsive(res, True)
 
-class Traffic(Templated):
-    @staticmethod
-    def slice_traffic(traffic, *indices):
-        return [[a] + [b[i] for i in indices] for a, b in traffic]
-
-
-class PromotedTraffic(Traffic):
-    """
-    Traffic page for a promoted link, including 2 graphs (one for
-    impressions and one for clicks with uniques on each plotted in
-    multiy format) and a table of the data.
-    """
-    def __init__(self, thing):
-        # TODO: needs a fix for multiple campaigns
-        self.thing = thing
-        d = until = None
-        self.traffic = []
-        if thing.campaigns:
-            d = min(sd.date() if isinstance(sd, datetime.datetime) else sd
-                     for sd, ed, bid, sr, trans_id in thing.campaigns.values()
-                     if trans_id)
-            until = max(ed.date() if isinstance(ed, datetime.datetime) else ed
-                     for sd, ed, bid, sr, trans_id in thing.campaigns.values()
-                     if trans_id)
-            now = datetime.datetime.now(g.tz).date()
-
-            # the results are preliminary until 1 day after the promotion ends
-            self.preliminary = (until + datetime.timedelta(1) > now)
-            self.traffic = load_traffic('hour', "thing", thing._fullname,
-                                        start_time = d, stop_time = until)
-            # load monthly totals if we have them, otherwise use the daily totals
-            self.totals =  load_traffic('month', "thing", thing._fullname)
-            if not self.totals:
-                self.totals = load_traffic('day', "thing", thing._fullname)
-            # generate a list of
-            # (uniq impressions, # impressions, uniq clicks, # clicks)
-            if self.totals:
-                self.totals = map(sum, zip(*zip(*self.totals)[1]))
-
-        imp = self.slice_traffic(self.traffic, 0, 1)
-
-        if len(imp) > 2:
-            imp_total = sum(x[2] for x in imp)
-            self.totals[1] = max(self.totals[1], imp_total)
-            imp_total = format_number(imp_total)
-            self.imp_graph = TrafficGraph(imp[-72:], ylabels = ['uniques', 'total'],
-                                          title = ("recent impressions (%s total)" %
-                                                   imp_total))
-            cli = self.slice_traffic(self.traffic, 2, 3)
-            cli_total = sum(x[2] for x in cli)
-            self.totals[3] = max(self.totals[3], cli_total)
-            cli_total = format_number(cli_total)
-            self.cli_graph = TrafficGraph(cli[-72:], ylabels = ['uniques', 'total'],
-                                          title = ("recent clicks (%s total)" %
-                                                   cli_total))
-
-        else:
-            self.imp_graph = self.cli_graph = None
-
-        editable = c.user_is_sponsor or c.user._id == thing.author_id
-        self.viewers = TrafficViewerList(thing, editable = editable)
-        Templated.__init__(self)
-
-    def to_iter(self, localize = True, total = False):
-        locale = c.locale
-        def num(x):
-            if localize:
-                return format_number(x, locale)
-            return str(x)
-        def row(label, data):
-            uimp, nimp, ucli, ncli = data
-            return (label,
-                   num(uimp), num(nimp), num(ucli), num(ncli),
-                   ("%.2f%%" % (float(100*ucli) / uimp)) if nimp else "--.--%", 
-                   ("%.2f%%" % (float(100*ncli) / nimp)) if nimp else "--.--%")
-
-        for date, data in self.traffic:
-            yield row(date.strftime("%Y-%m-%d %H:%M"), data)
-        if total:
-            yield row("total", self.totals)
-
-
-    def as_csv(self):
-        return to_csv(self.to_iter(localize = False, total = True))
-
-class RedditTraffic(Traffic):
-    """
-    fetches hourly and daily traffic for the current reddit.  If the
-    current reddit is a default subreddit, fetches the site-wide
-    uniques and includes monthly totals.  In this latter case, getter
-    methods are available for computing breakdown of site trafffic by
-    reddit.
-    """
-    def __init__(self):
-        self.has_data = False
-        ivals = ["hour", "day", "month"]
-
-        for ival in ivals:
-            if c.default_sr:
-                data = load_traffic(ival, "total", "")
-            else:
-                data = load_traffic(ival, "reddit", c.site.name)
-            if not data:
-                break
-            slices = [("uniques",     (0, 2) if c.site.domain else (0,),
-                       "FF4500"),
-                      ("impressions", (1, 3) if c.site.domain else (1,),
-                       "336699")]
-            if not c.default_sr and ival == 'day':
-                slices.append(("subscriptions", (4,), "00FF00"))
-            setattr(self, ival + "_data", data)
-            for name, indx, color in slices:
-                data2 = self.slice_traffic(data, *indx)
-                setattr(self, name + "_" + ival + "_chart", data2)
-                title = "%s by %s" % (name, ival)
-                res = TrafficGraph(data2, colors = [color], title = title)
-                setattr(self, name + "_" + ival, res)
-        else:
-            self.has_data = True
-        if self.has_data:
-            imp_by_day = [[] for i in range(7)]
-            uni_by_day = [[] for i in range(7)]
-            if c.site.domain:
-                dates, imps, foo    = zip(*self.impressions_day_chart)
-                dates, uniques, foo = zip(*self.uniques_day_chart)
-            else:
-                dates, imps    = zip(*self.impressions_day_chart)
-                dates, uniques = zip(*self.uniques_day_chart)
-            self.uniques_mean     = sum(map(float, uniques))/len(uniques)
-            self.impressions_mean = sum(map(float, imps))/len(imps)
-            for i, d in enumerate(dates):
-                imp_by_day[d.weekday()].append(float(imps[i]))
-                uni_by_day[d.weekday()].append(float(uniques[i]))
-            self.uniques_by_dow     = [sum(x)/max(len(x),1)
-                                       for x in uni_by_day]
-            self.impressions_by_dow = [sum(x)/max(len(x),1)
-                                       for x in imp_by_day]
-        Templated.__init__(self)
-
-    def reddits_summary(self):
-        if c.default_sr:
-            data = map(list, load_summary("reddit"))
-            data.sort(key = lambda x: x[1][1], reverse = True)
-            for d in data:
-                name = d[0]
-                for sr in (Friends, All, Sub, DefaultSR()):
-                    if name == sr.name:
-                        name = sr
-                        break
-                else:
-                    try:
-                        name = Subreddit._by_name(name)
-                    except NotFound:
-                        name = DomainSR(name)
-                d[0] = name
-            return data
-        return res
-
-    def monthly_summary(self):
-        """
-        Convenience method b/c it is bad form to do this much math
-        inside of a template.b
-        """
-        res = []
-        if c.default_sr:
-            data = self.month_data
-
-            # figure out the mean number of users last month, 
-            # unless today is the first and there is no data
-            days = self.day_data
-            now = datetime.datetime.utcnow()
-            if now.day != 1:
-                # project based on traffic so far
-                # totals are going to be up to yesterday
-                month_len = calendar.monthrange(now.year, now.month)[1]
-
-                lastmonth = datetime.datetime.utcnow().month
-                lastmonthyear = datetime.datetime.utcnow().year
-                if lastmonth == 1:
-                    lastmonthyear -= 1
-                    lastmonth = 1
-                else:
-                    lastmonth = (lastmonth - 1) if lastmonth != 1 else 12
-                # length of last month
-                lastmonthlen = calendar.monthrange(lastmonthyear, lastmonth)[1]
-    
-                lastdays = filter(lambda x: x[0].month == lastmonth, days) 
-                thisdays = filter(lambda x: x[0].month == now.month, days) 
-                user_scale = 0
-                if lastdays:
-                    last_mean = (sum(u for (d, (u, v)) in lastdays) / 
-                                 float(len(lastdays)))
-                    day_mean = (sum(u for (d, (u, v)) in thisdays) / 
-                                float(len(thisdays)))
-                    if last_mean and day_mean:
-                        user_scale = ( (day_mean * month_len) /
-                                       (last_mean * lastmonthlen) )
-            last_month_users = 0
-            locale = c.locale
-            for x, (date, d) in enumerate(data):
-                res.append([("date", date.strftime("%Y-%m")),
-                            ("", format_number(d[0], locale)),
-                            ("", format_number(d[1], locale))])
-                last_d = data[x-1][1] if x else None
-                for i in range(2):
-                    # store last month's users for this month's projection
-                    if x == len(data) - 2 and i == 0:
-                        last_month_users = d[i]
-                    if x == 0:
-                        res[-1].append(("",""))
-                    # project, unless today is the first of the month
-                    elif x == len(data) - 1 and now.day != 1:
-                        # yesterday
-                        yday = (datetime.datetime.utcnow()
-                                -datetime.timedelta(1)).day
-                        if i == 0:
-                            scaled = int(last_month_users * user_scale)
-                        else:
-                            scaled = float(d[i] * month_len) / yday
-                        res[-1].append(("gray",
-                                        format_number(scaled, locale)))
-                    elif last_d and d[i] and last_d[i]:
-                        f = 100 * (float(d[i])/last_d[i] - 1)
-
-                        res[-1].append(("up" if f > 0 else "down", 
-                                        "%5.2f%%" % f))
-        return res
-
-class TrafficGraph(Templated):
-    def __init__(self, data, width = 300, height = 175,
-                 bar_fmt = True, colors = ("FF4500", "336699"), title = '',
-                 ylabels = [], multiy = True):
-        # fallback on google charts
-        chart = graph.LineGraph(data[:72], colors = colors)
-        self.gc = chart.google_chart(ylabels = ylabels, multiy = multiy, title = title)
-
-        xdata = []
-        ydata = []
-        for d in data:
-            xdata.append(time.mktime(d[0].timetuple())*1000)
-            ydata.append(d[1:])
-        ydata = zip(*ydata)
-        self.colors = colors
-        self.title = title
-
-        if bar_fmt:
-            xdata = graph.DataSeries(xdata).toBarX()
-
-        if ydata and not isinstance(ydata[0], (list, tuple)):
-            if bar_fmt:
-                ydata = graph.DataSeries(ydata).toBarY()
-            self.data = [zip(xdata, ydata)]
-        else:
-            self.data = []
-            for ys in ydata:
-                if bar_fmt:
-                    ys = graph.DataSeries(ys).toBarY()
-                self.data.append(zip(xdata, ys))
-
-        self.width = width
-        self.height = height
-        Templated.__init__(self)
-
-
 class RedditAds(Templated):
     def __init__(self, **kw):
         self.sr_name = c.site.name
@@ -3527,31 +3331,42 @@ class Promotion_Summary(Templated):
         authors = {}
         author_score = {}
         self.total = 0
-        for link, indx, s, e in Promote_Graph.get_current_promos(start_date, end_date):
-            campaigns = getattr(link, 'campaigns', {})
-            if indx in campaigns:
-                sd, ed, bid, sr, trans_id = link.campaigns[indx]
-                if trans_id > 0: #ignore freebies
-                    links.add(link)
-                    link.bid = getattr(link, "bid", 0) + bid
-                    link.ncampaigns = getattr(link, "ncampaigns", 0) + 1
+        for link, camp_id, s, e in Promote_Graph.get_current_promos(start_date, end_date):
+            # fetch campaign or skip to next campaign if it's not found
+            try:
+                campaign = PromoCampaign._byID(camp_id, data=True)
+            except NotFound:
+                g.log.error("Missing campaign (link: %d, camp_id: %d) omitted "
+                            "from promotion summary" % (link._id, camp_id))
+                continue
 
-                    bid_per_day = bid / (ed - sd).days
-                    if isinstance(sd, datetime.datetime):
-                        sd = sd.date()
-                    if isinstance(ed, datetime.datetime):
-                        ed = ed.date()
-                    sd = max(sd, start_date)
-                    ed = min(ed, end_date)
+            # get required attributes or skip to next campaign if any are missing.
+            try:
+                campaign_trans_id = campaign.trans_id
+                campaign_start_date = campaign.start_date
+                campaign_end_date = campaign.end_date
+                campaign_bid = campaign.bid
+            except AttributeError, e:
+                g.log.error("Corrupt PromoCampaign (link: %d, camp_id, %d) "
+                            "omitted from promotion summary. Error was: %r" % 
+                            (link._id, camp_id, e))
+                continue
 
-                    self.total += bid_per_day * (ed - sd).days
+            if campaign_trans_id > 0: # skip freebies and unauthorized
+                links.add(link)
+                link.bid = getattr(link, "bid", 0) + campaign_bid
+                link.ncampaigns = getattr(link, "ncampaigns", 0) + 1
+                
+                bid_per_day = campaign_bid / (campaign_end_date - campaign_start_date).days
 
-                    authors.setdefault(link.author.name, []).append(link)
-                    author_score[link.author.name] = author_score.get(link.author.name,0) + link._score
-            else: # indx not found in campaigns. bad data?
-                g.log.error("Missing campaign (link: %d, indx: %d) omitted "
-                            "from promotion summary" % (link._id, indx))
-
+                sd = max(start_date, campaign_start_date.date())
+                ed = min(end_date, campaign_end_date.date())
+                
+                self.total += bid_per_day * (ed - sd).days
+                    
+                authors.setdefault(link.author.name, []).append(link)
+                author_score[link.author.name] = author_score.get(link.author.name, 0) + link._score
+            
         links = list(links)
         links.sort(key = lambda x: x._score, reverse = True)
         author_score = list(sorted(((v, k) for k,v in author_score.iteritems()),
@@ -3570,6 +3385,10 @@ class Promotion_Summary(Templated):
         emailer.send_html_email(to_addr, g.feedback_email,
                                 "Self-serve promotion summary for last %d days"
                                 % ndays, p.render('email'))
+
+
+def force_datetime(d):
+    return datetime.datetime.combine(d, datetime.time())
 
 
 class Promote_Graph(Templated):
@@ -3663,84 +3482,43 @@ class Promote_Graph(Templated):
                 else:
                     break
 
-        # load recent traffic as well:
-        self.recent = {}
-        #TODO 
-        for k, v in []:#load_summary("thing"):
-            if k.startswith('t%d_' % Link._type_id):
-                self.recent[k] = v
-
-        if self.recent:
-            link_listing = wrap_links(self.recent.keys())
-            for t in link_listing:
-                self.recent[t._fullname].insert(0, t)
-
-            self.recent = self.recent.values()
-            self.recent.sort(key = lambda x: x[0]._date)
-
         pool =PromotionWeights.bid_history(promote.promo_datetime_now(offset=-30),
                                            promote.promo_datetime_now(offset=2))
-        if pool:
-            # we want to generate a stacked line graph, so store the
-            # bids and the total including refunded amounts
-            total_sale = sum((b-r) for (d, b, r) in pool)
-            total_refund = sum(r for (d, b, r) in pool)
-            
-            self.money_graph = TrafficGraph([(d, b, r) for (d, b, r) in pool],
-                                            colors = ("008800", "FF0000"),
-                                            ylabels = ['total ($)'],
-                                            title = ("monthly sales ($%.2f charged, $%.2f credits)" %
-                                                     (total_sale, total_refund)),
-                                            multiy = False)
-
-            #TODO
-            self.top_promoters = []
-        else:
-            self.money_graph = None
-            self.top_promoters = []
 
         # graphs of impressions and clicks
-        self.promo_traffic = load_traffic('day', 'promos')
+        self.promo_traffic = promote.traffic_totals()
 
         impressions = [(d, i) for (d, (i, k)) in self.promo_traffic]
         pool = dict((d, b+r) for (d, b, r) in pool)
 
         if impressions:
-            self.imp_graph = TrafficGraph(impressions, ylabels = ['total'],
-                                          title = "impressions")
-
-            clicks = [(d, k) for (d, (i, k)) in self.promo_traffic]
-
-            CPM = [(d, (pool.get(d, 0) * 1000. / i) if i else 0)
+            CPM = [(force_datetime(d), (pool.get(d, 0) * 1000. / i) if i else 0)
                    for (d, (i, k)) in self.promo_traffic if d in pool]
-
-            CPC = [(d, (100 * pool.get(d, 0) / k) if k else 0)
-                   for (d, (i, k)) in self.promo_traffic if d in pool]
-
-            CTR = [(d, (100 * float(k) / i if i else 0))
-                   for (d, (i, k)) in self.promo_traffic if d in pool]
-
-            self.cli_graph = TrafficGraph(clicks, ylabels = ['total'],
-                                          title = "clicks")
             mean_CPM = sum(x[1] for x in CPM) * 1. / max(len(CPM), 1)
-            self.cpm_graph = TrafficGraph([(d, min(x, mean_CPM*2)) for d, x in CPM],
-                                          colors = ["336699"], ylabels = ['CPM ($)'],
-                                          title = "cost per 1k impressions " + 
-                                          "($%.2f average)" % mean_CPM)
 
+            CPC = [(force_datetime(d), (100 * pool.get(d, 0) / k) if k else 0)
+                   for (d, (i, k)) in self.promo_traffic if d in pool]
             mean_CPC = sum(x[1] for x in CPC) * 1. / max(len(CPC), 1)
-            self.cpc_graph = TrafficGraph([(d, min(x, mean_CPC*2)) for d, x in CPC],
-                                          colors = ["336699"], ylabels = ['CPC ($0.01)'],
-                                          title = "cost per click " + 
-                                          "($%.2f average)" % (mean_CPC/100.))
 
-            self.ctr_graph = TrafficGraph(CTR, colors = ["336699"], ylabels = ['CTR (%)'],
-                                          title = "click through rate")
+            cpm_title = _("cost per 1k impressions ($%(avg).2f average)") % dict(avg=mean_CPM)
+            cpc_title = _("cost per click ($%(avg).2f average)") % dict(avg=mean_CPC/100.)
 
+            data = traffic.zip_timeseries(((d, (min(v, mean_CPM * 2),)) for d, v in CPM),
+                                          ((d, (min(v, mean_CPC * 2),)) for d, v in CPC))
+
+            from r2.lib.pages.trafficpages import COLORS  # not top level because of * imports :(
+            self.performance_table = TimeSeriesChart("promote-graph-table",
+                                                     _("historical performance"),
+                                                     "day",
+                                                     [dict(color=COLORS.DOWNVOTE_BLUE,
+                                                           title=cpm_title,
+                                                           shortname=_("CPM")),
+                                                      dict(color=COLORS.DOWNVOTE_BLUE,
+                                                           title=cpc_title,
+                                                           shortname=_("CPC"))],
+                                                     data)
         else:
-            self.imp_graph = self.cli_graph = None
-            self.cpc_graph = self.cpm_graph = None
-            self.ctr_graph = None
+            self.performance_table = None
 
         self.promo_traffic = dict(self.promo_traffic)
 
@@ -3764,9 +3542,6 @@ class Promote_Graph(Templated):
                    num(link._ups - link._downs), 
                    "$%.2f" % link.promote_bid,
                    _force_unicode(link.title))
-
-    def as_csv(self):
-        return to_csv(self.to_iter(localize = False))
 
 class InnerToolbarFrame(Templated):
     def __init__(self, link, expanded = False):
@@ -3802,13 +3577,10 @@ class HouseAd(CachedTemplate):
         res = CachedTemplate.render(self, *a, **kw)
         return responsive(res, False)
 
-class ComScore(CachedTemplate):
-    pass
-
 def render_ad(reddit_name=None, codename=None, keyword=None):
     if not reddit_name:
         reddit_name = g.default_sr
-        if g.frontpage_dart:
+        if g.live_config["frontpage_dart"]:
             return Dart_Ad("reddit.dart", reddit_name, keyword).render()
 
     try:
@@ -3892,6 +3664,9 @@ class AccountActivityPage(BoringPage):
 
 class UserIPHistory(Templated):
     def __init__(self):
+        from r2.controllers.oauth2 import scope_info
+        self.my_apps = [(app, [scope_info[scope] for scope in scopes])
+                        for app, scopes in OAuth2Client._by_user(c.user)]
         self.ips = ips_by_account_id(c.user._id)
         super(UserIPHistory, self).__init__()
 
@@ -3899,3 +3674,25 @@ class ApiHelp(Templated):
     def __init__(self, api_docs, *a, **kw):
         self.api_docs = api_docs
         super(ApiHelp, self).__init__(*a, **kw)
+
+class RulesPage(Templated):
+    pass
+
+class TimeSeriesChart(Templated):
+    def __init__(self, id, title, interval, columns, rows,
+                 latest_available_data=None, classes=[]):
+        self.id = id
+        self.title = title
+        self.interval = interval
+        self.columns = columns
+        self.rows = rows
+        self.latest_available_data = (latest_available_data or
+                                      datetime.datetime.utcnow())
+        self.classes = " ".join(classes)
+
+        Templated.__init__(self)
+
+class InterestBar(Templated):
+    def __init__(self, has_subscribed):
+        self.has_subscribed = has_subscribed
+        Templated.__init__(self)

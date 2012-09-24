@@ -1,6 +1,4 @@
 r.login = {
-    currentOrigin: location.protocol+'//'+location.host,
-
     post: function(form, action, callback) {
         if (r.config.cnameframe && !r.config.https_endpoint) {
             form.$el.unbind()
@@ -12,7 +10,7 @@ r.login = {
             endpoint = r.config.https_endpoint || ('http://'+r.config.ajax_domain),
             apiTarget = endpoint+'/api/'+action+'/'+username
 
-        if (this.currentOrigin == endpoint || $.support.cors) {
+        if (r.config.currentOrigin == endpoint || $.support.cors) {
             var params = form.serialize()
             params.push({name:'api_type', value:'json'})
             $.ajax({
@@ -192,7 +190,7 @@ r.ui.LoginForm.prototype = $.extend(new r.ui.Form(), {
 
     _handleNetError: function(result, err, xhr) {
         r.ui.Form.prototype._handleNetError.apply(this, arguments)
-        if (xhr.status == 0 && r.login.currentOrigin != r.config.https_endpoint) {
+        if (xhr.status == 0 && r.config.currentOrigin != r.config.https_endpoint) {
             $('<p>').append(
                 $('<a>')
                     .text(r.strings.login_fallback_msg)
@@ -209,8 +207,50 @@ r.ui.LoginForm.prototype = $.extend(new r.ui.Form(), {
 
 r.ui.RegisterForm = function() {
     r.ui.Form.apply(this, arguments)
+    this.checkUsernameDebounced = _.debounce($.proxy(this, 'checkUsername'), 500)
+    this.$user = this.$el.find('[name="user"]')
+    this.$user.on('keyup', $.proxy(this, 'usernameChanged'))
+    this.$submit = this.$el.find('.submit button')
 }
 r.ui.RegisterForm.prototype = $.extend(new r.ui.Form(), {
+    usernameChanged: function() {
+        var name = this.$user.val()
+        if (name == this._priorName) {
+            return
+        } else {
+            this._priorName = name
+        }
+
+        this.$el.find('.error.field-user').hide()
+        this.$submit.attr('disabled', false)
+        this.$el.removeClass('name-available name-taken')
+        this.checkUsernameDebounced(name)
+        this.$el.toggleClass('name-checking', !!name)
+    },
+
+    checkUsername: function(name) {
+        if (name) {
+            $.ajax({
+                url: '/api/username_available.json',
+                data: {user: name},
+                success: $.proxy(this, 'displayUsernameStatus'),
+                complete: $.proxy(function() { this.$el.removeClass('name-checking') }, this)
+            })
+        }
+    },
+
+    displayUsernameStatus: function(result) {
+        if (result.json && result.json.errors) {
+            this.showErrors(result.json.errors)
+            this.$submit.attr('disabled', true)
+        } else {
+            this.$el
+                .removeClass('name-available name-taken')
+                .addClass(result ? 'name-available' : 'name-taken')
+            this.$submit.attr('disabled', result == false)
+        }
+    },
+
     _submit: function() {
         r.login.post(this, 'register', $.proxy(this, 'handleResult'))
     },

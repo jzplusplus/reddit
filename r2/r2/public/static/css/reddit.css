@@ -658,6 +658,10 @@ ul.flat-vert {text-align: left;}
 .domain { color: #888; font-size:x-small; }
 .domain a { color: #888 }
 .domain a:hover { text-decoration: underline }
+.spam .domain,
+.spam .domain a {
+    color: black;
+}
 
 .link-note {
     background-color: white;
@@ -884,25 +888,58 @@ a.author { margin-right: 0.5em; }
     text-decoration: underline;
 }
 
-.help a.open {
-    margin: 0px 5px 5px 0;
-    position: absolute;
-    right: 0px;
-    bottom: 0px;
-}
-
-
 .help.help-cover {
+    position: relative;
     background-color: #F8F8F8;
     border: 1px solid gray;
-    font-size: 110%;
     display:none;
     padding: 5px 10px 10px 10px;
     overflow:hidden;
  }
 
-.help p, .help form { margin: 5px; } 
+.help p, .help form { margin: 5px; font-size:110%; }
 .help form { display: inline; }
+
+.help-hoverable {
+    cursor: help;
+}
+
+.help-bubble {
+    display: none;
+    position: absolute;
+    width: 35em;
+    background: white;
+    color: #333;
+    border: 1px solid gray;
+    padding: 3px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.25);
+}
+
+.help-bubble p, .help-bubble form {
+    margin: .5em;
+}
+
+.help-bubble:before, .help-bubble:after {
+    position: absolute;
+    right: 8px;
+    display: block;
+    content: '';
+    border: 9px solid transparent;
+}
+
+.help-bubble:before {
+    top: -19px;
+    border-bottom-color: gray;
+}
+
+.help-bubble:after {
+    top: -18px;
+    border-bottom-color: white;
+}
+
+.help-bubble a:hover {
+    text-decoration: underline
+}
 
 .infotext { 
     border: 1px solid #369;
@@ -917,8 +954,192 @@ a.author { margin-right: 0.5em; }
     margin: 5px;
 }
 
-.wikipage {
+.wiki-page-content {
     margin: 15px;
+}
+
+.wikirevisionlisting .generic-table {
+    width: 100%;
+}
+
+.wikititle strong {
+    font-weight: bold;
+}
+
+.wikititle {
+    margin-left: 15px;
+    color: #666;
+}
+
+.wiki-page .md {
+    word-wrap: break-word;
+    max-width: none;
+}
+
+.wiki-page .fancy-settings .toggle {
+    display: inline-block;
+    padding-right: 15px;
+}
+
+.wiki-page input {
+    margin: 5px;
+    padding: 2px;
+    margin-left: 0;
+}
+
+.wiki-page-content {
+    margin-right: 325px;
+}
+.discussionlink {
+    display: inline-block;
+    margin-left: 15px;
+    padding-right: 50px;
+}
+
+.discussionlink a {
+    padding-left: 15px;
+}
+
+.wikirevisionlisting table tr td {
+    padding-right: 15px;
+}
+
+.wiki-page .pagelisting ul {
+    list-style: disc;
+    padding: 2px;
+    padding-left: 10px;
+}
+
+.wiki-page .revision {
+    transition: opacity 500ms;
+    -o-transition: opacity 500ms;
+    -ms-transition: opacity 500ms;
+    -moz-transition: opacity 500ms;
+    -webkit-transition: opacity 500ms;
+}
+
+.wiki-page .revision.hidden {
+    opacity: .5;
+}
+
+.wikiaction-revisions::before {
+    background-image: url(../report.png); /* SPRITE */
+}
+
+.wikiaction-pages::before {
+    background-image: url(../page_white_copy.png); /* SPRITE */
+}
+
+.pageactions {
+    display: inline-block;
+    font-size: larger;
+    margin-left: 25px;
+    border-radius: 5px;
+    border: 1px solid #8D9CAA;
+    vertical-align: middle;
+}
+
+.wikiaction {
+    display: inline-block;
+    margin: 2px;
+    padding-top: 2px;
+    padding-bottom: 3px;
+    border-radius: 3px;
+}
+
+.wikititle {
+    display: inline;
+    vertical-align: middle;
+}
+
+.pageactions .wikiaction {
+    padding-right: 10px;
+    padding-left: 10px;
+}
+
+.pageactions .wikiaction:hover {
+    background-color: #CEE3F8;
+}
+
+.pageactions .wikiaction-current:hover {
+    background-color: #5F99CF;
+}
+
+.pageactions .wikiaction-current {
+    color: white;
+    background-color: #5F99CF;
+}
+
+/* wiki table of contents */
+
+.md.wiki ul:first-child {
+    float: right;
+    padding: 10px 25px;
+    margin-right: 0;
+    border: 1px solid #8D9CAA;
+    list-style: none;
+}
+
+.md.wiki ul:first-child ul {
+    margin: 4px 0;
+    padding-left: 25px;
+    border-left: 1px dotted #cce;
+    list-style: none;
+}
+
+/* wiki content */
+
+.md.wiki p, .md.wiki blockquote {
+    margin: .75em 0;
+}
+
+.md.wiki blockquote {
+    padding-left: 1em;
+}
+
+.md.wiki h1,
+.md.wiki h2,
+.md.wiki h3,
+.md.wiki h4,
+.md.wiki h5,
+.md.wiki h6 {
+    font-weight: bold;
+    color: black;
+    margin-bottom: .25em;
+    margin-top: .5em;
+}
+
+.md.wiki h1 {
+    margin-top: .75em;
+    font-size: 2.4em;
+}
+
+.md.wiki ul:first-child + h1 {
+    margin-top: 0;
+}
+
+.md.wiki h2 {
+    margin-top: .75em;
+    font-size: 1.8em;
+}
+
+.md.wiki h3 {
+    font-size: 1.6em;
+}
+
+.md.wiki h4 {
+    font-size: 1.4em;
+    color: #333;
+}
+
+.md.wiki h5 {
+    font-size: 1.2em;
+    color: #444;
+}
+
+.md.wiki h6 {
+    font-size: 1.05em;
+    color: #666;
 }
 
 /* organic listing */
@@ -969,6 +1190,14 @@ a.author { margin-right: 0.5em; }
 }
 .organic-listing .nextprev .arrow:active {
     top: 1px;
+}
+
+.organic-listing .help {
+    color: #336699;
+    margin: 0px 5px 5px 0;
+    position: absolute;
+    right: -1px;
+    bottom: 0px;
 }
 
 .link.promotedlink {
@@ -1122,6 +1351,7 @@ a.author { margin-right: 0.5em; }
 .md em { font-style: italic; }
 .md strong em { font-style: italic; font-weight: bold }
 .md img { display: none }
+.md.wiki img { display: block }
 .md ol, .md ul { margin: 10px 2em; }
 .md ul { list-style: disc outside }
 .md ol { list-style: decimal outside }
@@ -1788,6 +2018,8 @@ label + #moresearchinfo {
 
 .searchpane {
     margin: 5px 305px 5px 0px;
+    padding-left: 96px;
+    background: #E0E0E0 url(../search-large.png) 26px center no-repeat;
 } 
 
 .searchpane #search input[type=text] { }
@@ -1811,6 +2043,43 @@ label + #moresearchinfo {
 .searchfail a {
     color: red;
     text-decoration: underline;
+}
+
+.searchfacets {
+  overflow: auto;
+  font-size: small;
+  white-space: pre-wrap;
+  border: 1px solid gray;
+  padding: 10px;
+  margin-top: -6px;
+  box-shadow: 0 4px 6px -1px #ccc inset;
+  background: #fefefe;
+}
+
+.searchfacets .title {
+  margin: 5px;
+}
+
+.searchfacets .facet:hover {
+  text-decoration: underline;
+}
+
+.searchfacets .list {
+  margin: 0px 0px 0px 10px;
+}
+
+li.searchfacet {
+  display: inline-block;
+  width: 15em;
+}
+
+.facet.count {
+  font-weight: bold;
+  color: #888888;
+}
+
+#search input[type='submit'] {
+	padding: 1px 10px;
 }
 
 /* login, register */
@@ -1879,6 +2148,29 @@ label + #moresearchinfo {
 
 #passform h1 {margin-bottom: 0px}
 #passform p {margin-bottom: 5px; font-size: small}
+
+.register-form .name-entry * {
+    vertical-align: middle;
+}
+
+.notice-taken, .notice-available {
+    display: none;
+    margin-left: 6px;
+    line-height: 16px;
+}
+
+.register-form.name-taken .notice-taken, .register-form.name-available .notice-available {
+    display: inline-block;
+}
+
+.register-form .name-entry .throbber {
+    display: none;
+    margin-left: 5px;
+}
+
+.register-form.name-checking .name-entry .throbber {
+    display: inline-block;
+}
 
 /* cover */
 .cover {
@@ -1966,6 +2258,92 @@ label + #moresearchinfo {
 
 .usertable .remove-self .error.active {
     display: inline;
+}
+
+body.rulespage-body {
+    overflow-y: scroll;
+}
+
+.rulespage {
+    margin: 0 auto;
+    position: relative;
+    vertical-align: middle;
+    width: 600px;
+}
+
+.rulespage h1 {
+    font-size: xx-large;
+    text-align: center;
+    margin-top: 20px;
+}
+
+.rulespage .info {
+    font-size: larger;
+    padding-top: 10px;
+}
+
+.rulespage .rule-list {
+    margin:10px;
+    padding:10px;
+    font-size: medium;
+}
+
+.rulespage li {
+    border-bottom: 1px solid #ddd;
+    padding: 10px;
+    margin: 10px;
+    -webkit-background-clip: padding-box;
+    -moz-background-clip: padding-box;
+    background-clip: padding-box;
+}
+
+.rulespage li.first-rule {
+    border-top: 1px solid #ddd;
+    padding-top: 18px;
+}
+
+.rulespage li#minors {
+    padding-bottom: 18px;
+}
+
+.rulespage .expander {
+    color: gray;
+    cursor: help;
+    padding: 10px;
+}
+
+.rulespage .examples {
+    font-size: small;
+}
+
+.rulespage li.example {
+    border: none;
+}
+
+.rulespage li.good-example {
+    background: #bcf5a9;
+}
+
+.rulespage li.bad-example {
+    background: #f5a9a9;
+}
+
+.rulespage em {
+    font-weight: bold;
+}
+
+.rulespage em.toggle {
+    font-weight: normal;
+}
+
+.rulespage .info {
+    text-align: center;
+}
+
+.rulespage img.bottom {
+    margin-top: 30px;
+    text-align: center;
+    padding-bottom: -40px;
 }
 
 .aboutpage {  margin-right: 320px; }
@@ -2303,7 +2681,12 @@ label + #moresearchinfo {
     color: gray;
     text-align: center;
     margin: 1px;
- }
+    color: #369;
+}
+
+button.button[disabled] {
+    color: gray;
+}
 
 .button #cover {
     position: relative; 
@@ -2354,7 +2737,6 @@ label + #moresearchinfo {
 .button .blog .r { color: gray;  }
 .button .blog .score { white-space: nowrap; }
 
-.button {color: #369;}
 .button a:hover { text-decoration: underline }
 
 .button .blog1 { font-size: x-small; }
@@ -3486,7 +3868,8 @@ ul.tabmenu.formtab {
 
 .roundfield textarea,
 .roundfield input[type=text],
-.roundfield input[type=password] {
+.roundfield input[type=password],
+.roundfield input[type=number] {
     font-size: 100%;
     width: 492px;
     padding: 3px;
@@ -3712,46 +4095,97 @@ ul.tabmenu.formtab {
     }
 
 /***traffic stuff***/
-.traffic-table {margin: 10px 20px; }
+.traffic-table,
+.traffic-tables-side fieldset {
+    margin: 1.5em 2em;
+    font-size: small;
+    border: 0;
+}
+
+.traffic-table caption,
+.traffic-tables-side fieldset legend{
+    font-weight: bold;
+    text-align: left;
+    font-size: medium;
+    font-variant: small-caps;
+}
+
 .traffic-table a:hover { text-decoration: underline; }
-.traffic-table th { font-weight: bold; text-align: center;}
-.traffic-table th,
+.traffic-table thead th { font-weight: bold; text-align: center; padding-left: 2em;}
+.traffic-table thead th:first-child { text-align: left; padding-left: 0; }
+.traffic-table tbody th,
+.traffic-table tfoot th { text-align: left;}
 .traffic-table td { padding: 0 5px; }
 .traffic-table td { text-align: right; }
 
-.traffic-table td.up   { color: #FF8B60; }
-.traffic-table td.down { color: #336699; }
-.traffic-table td.gray { color: gray; font-style: italic; }
+.traffic-table tfoot tr { border-top: 1px solid black; }
+.traffic-table tfoot th,
+.traffic-table tfoot td { font-style: italic; }
 
 .traffic-table tr.max  { border: 2px solid #FF8B60; }
 .traffic-table tr.min  { border: 2px solid #336699; }
-.traffic-table tr.odd { background-color: #E0E0E0; }
+.traffic-table tbody tr:nth-child(even) { background-color: #E0E0E0; }
 .traffic-table tr.mean { font-style: italic; border-top: 1px solid; }
 
-.traffic-table .prelim { font-style: italic; }
-.traffic-table .totals { font-style: italic; border-top: 1px solid black; }
-
-.traffic-graph {
-    padding: 10px; 
-    border: 1px solid #B0B0B0; 
-    margin-left: 10px;
-    margin-bottom: 10px;
-    display: inline-block;
+.traffic-tables-side {
+    float: left;
+    min-height: 50em;
 }
-.traffic-graph .title { 
+
+#promote-graph-table,
+#traffic-hour {
+    display: none;
+}
+
+div.timeseries {
+    padding: 10px;
+    border: 1px solid #B0B0B0;
+    margin: 10px 10px;
+    display: inline-block;
     text-align: center;
 }
+.timeseries-placeholder {
+    width: 350px;
+    height: 200px;
+    font-family: verdana;
+    font-size: small;
+}
+div.timeseries span.title {
+    font-weight: bold;
+    font-size: medium;
+    font-variant: small-caps;
+}
 
-.promoted-traffic h1 { 
-    border: none;
-    margin-bottom: 10px; 
+#timeseries-unprocessed {
+    font-size: small;
+    font-weight: bold;
+    color: #900;
+    margin: 1em 0;
+    max-width: 60em;
+}
+
+.timeseries-tablebar {
+    height: 5px;
+    margin: 1px 0;
 }
 
 .promoted-traffic .usertable {  margin-left: 0px;  }
 
-.promoted-traffic h1 a { 
+.promoted-traffic h1 a {
     font-size: small;
-    margin-left: 10px; 
+    margin-left: 10px;
+}
+
+.promoted-traffic tfoot th,
+.promoted-traffic tfoot td {
+    font-style: normal;
+    font-weight: bold;
+    text-transform: uppercase;
+    padding-top: .3em;
+}
+
+p.totals-are-preliminary {
+    margin-left: 10px;
 }
 
 .award-square-container {
@@ -4407,15 +4841,21 @@ dd { margin-left: 20px;  }
 .icon-menu .reddit-traffic:before,
 .icon-menu .reddit-reported:before,
 .icon-menu .reddit-spam:before,
+.icon-menu .wikiaction-pages:before,
+.icon-menu .wikiaction-revisions:before,
 .icon-menu .reddit-ban:before,
 .icon-menu .reddit-flair:before,
 .icon-menu .reddit-moderationlog:before,
+.icon-menu .reddit-unmoderated:before,
 .icon-menu .reddit-moderators:before,
 .icon-menu .moderator-mail:before,
 .icon-menu .reddit-contributors:before,
 .icon-menu .reddit-modqueue:before,
 .giftgold a:before,
-.gold-form h1.goldgift:before {
+.gold-form h1.goldgift:before,
+.users-online:before,
+.notice-taken:before,
+.notice-available:before {
     height: 16px;
     width: 16px;
     display: block;
@@ -4469,6 +4909,10 @@ dd { margin-left: 20px;  }
     background-image: url(../reddit_moderationlog.png); /* SPRITE */
     margin-left: 1px;
 }
+.icon-menu .reddit-unmoderated:before {
+    background-image: url(../reddit_unmoderated.png); /* SPRITE */
+    margin-left: 1px;
+}
 .icon-menu .reddit-moderators:before {
     background-image: url(../shield.png); /* SPRITE */
 }
@@ -4484,6 +4928,22 @@ dd { margin-left: 20px;  }
 }
 .icon-menu .reddit-modqueue:before {
     background-image: url(../reddit_modqueue.png); /* SPRITE */
+}
+
+.users-online:before {
+    background-image: url(../online.png);  /* SPRITE */
+}
+
+.notice-taken:before, .notice-available:before {
+    margin-right: 3px;
+}
+
+.notice-taken:before {
+    background-image: url(../icon-circle-exclamation.png);  /* SPRITE */
+}
+
+.notice-available:before {
+    background-image: url(../icon-circle-check.png);  /* SPRITE */
 }
 
 .linkinfo {
@@ -5056,7 +5516,16 @@ tr.gold-accent + tr > td {
 .oauth2-authorize .icon {
     position: absolute;
     left: 160px;
-    top: 77px;
+    top: 69px;
+    width: 72px;
+    height: 72px;
+    line-height: 72px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.oauth2-authorize .icon img {
+    vertical-align: middle;
 }
 
 .oauth2-authorize .access,
@@ -5238,8 +5707,13 @@ tr.gold-accent + tr > td {
 }
 
 .adminpasswordform {
-    margin-bottom: .5em;
-    display: inline-block;
+    display: block;
+    margin: .5em auto 0 auto;
+}
+
+.adminpasswordform label {
+    display: block;
+    padding: .5em;
 }
 
 .content.api-help {
@@ -5341,6 +5815,7 @@ tr.gold-accent + tr > td {
 }
 
 .api-help .toc a {
+    display: block;
     color: #8EB0D2;
 }
 
@@ -5357,12 +5832,40 @@ tr.gold-accent + tr > td {
     color: #8EB0D2;
 }
 
+.api-help .toc li.supports-oauth a { background: none; }
+.api-help .toc li.supports-oauth a:after {
+    content: 'oauth';
+    display: inline-block;
+    position: absolute;
+    right: 0;
+    font-size: .75em; 
+    background: #29440e;
+    color: #ddc;
+    padding: 0 2px;
+    margin-left: 2px;
+    border-radius: 2px;
+}
+
 .api-help .endpoint em.placeholder {
     color: #369;
 }
 
 .api-help .endpoint, .api-help .section .description {
     margin-bottom: 1.5em;
+}
+
+.api-help .oauth-scope-list { display: inline; margin-left: 1em; }
+
+.api-help .oauth-scope {
+    display: inline-block;
+    margin-left: 0.5em;
+    font-size: .75em; 
+    font-weight: normal;
+    vertical-align: bottom;
+    background: #577439;
+    color: #fbfbf9;
+    padding: 2px 6px;
+    border-radius: 2px;
 }
 
 .api-help .methods h2 {
@@ -5430,6 +5933,278 @@ tr.gold-accent + tr > td {
     text-align: center;
 }
 
-#classy-error .md {
-    display: inline-block;
+.errorpage-message {
+    margin: 1em auto;
+    width: 500px;
+    font-size: small;
 }
+
+.errorpage-message.sr-description {
+    border-top: 2px solid black;
+    margin-top: 2em;
+    padding-top: 2em;
+}
+
+.errorpage-message.sr-description h2 {
+    color: black;
+    font-weight: bold;
+    font-size: 125%;
+    margin-bottom: .7em;
+}
+
+.sr-description p {
+    margin: .75em 0;
+}
+
+/** one-time password stuff **/
+#pref-otp .roundfield {
+    margin: 1em 0;
+}
+
+#pref-otp-qr {
+    display: none;
+}
+
+#otp-secret-info {
+    margin: 2em;
+    width: 512px;
+    font-size: small;
+}
+
+#otp-secret-info div {
+    margin: 1em 0;
+}
+
+#otp-secret-info .secret {
+    font-weight: bold;
+}
+
+.users-online {
+    margin-bottom: .25em;
+}
+
+.users-online .word, .users-online .number:after {
+    cursor: help;
+}
+
+.sr-interest-bar {
+    position: relative;
+    background: #cee3f8 url(../snoo-upside-down.png) 15px top no-repeat;
+    padding: 5px;
+    overflow: hidden;
+    border: 1px solid #336699;
+    margin-bottom: 10px;
+}
+
+.organic-listing .sr-interest-bar {
+    border: none;
+    margin: 0;
+}
+
+.sr-interest-bar .bubble {
+    position: relative;
+    margin-left: 85px;
+    margin-right: 68px;
+    max-width: 700px;
+    font-size: 13px;
+    background: white;
+    padding: 6px;
+    border-radius: 8px;
+}
+
+.sr-interest-bar .bubble:after {
+    position: absolute;
+    display: block;
+    content: '';
+    border: 10px solid;
+    border-style: solid solid outset;
+    border-color: transparent;
+    border-right-color: white;
+    left: -20px;
+    top: 15px;
+}
+
+.sr-interest-bar .bubble p {
+    margin: 6px 3px;
+    margin-top: 0;
+}
+
+.sr-interest-bar .subscribe {
+    background-image: url(../bg-button-add.png); /* SPRITE stretch-x */
+    border: 1px solid #444;
+    border-radius: 3px;
+    padding: 0 6px;
+    color: white;
+    font-weight: bold;
+}
+
+.sr-interest-bar .query-box {
+    position: relative;
+    padding: 2px 4px;
+    border: 2px solid #979797;
+    border-radius: 5px;
+}
+
+.sr-interest-bar.focus .query-box {
+    border-color: #5f99cf;
+}
+
+.sr-interest-bar.error .query-box {
+    border-color: #cf5e5e;
+}
+
+.sr-interest-bar .error-caption, .sr-interest-bar.error .caption {
+    display: none;
+}
+
+.sr-interest-bar.error .error-caption {
+    display: block;
+}
+
+.sr-interest-bar .query {
+    width: 100%;
+    font-size: 20px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    outline: none;
+}
+
+.sr-interest-bar .throbber {
+    position: absolute;
+    right: 3px;
+    top: 5px;
+}
+
+.sr-interest-bar ul.results {
+    margin: 0;
+    margin-top: 6px;
+    padding-top: 2px;
+    border-top: 1px dotted #bbb;
+    display: none;
+}
+
+.sr-interest-bar li {
+    display: inline-block;
+    margin: 6px 3px;
+}
+
+.sr-interest-bar a {
+    padding: 1px 2px;
+}
+
+.sr-interest-bar a:hover {
+    text-decoration: underline;
+}
+
+.sr-interest-bar .results .random {
+    color: gray;
+    font-weight: bold;
+}
+
+.ajax-upload-form iframe { display: none; }
+
+.developed-app, .authorized-app {
+    border: solid 1px black;
+    margin-left: 20px;
+    margin-bottom: 0.5em;
+    padding: 7px;
+    position: relative;
+    width: 880px;
+    font-size: x-small;
+}
+
+.developed-app.collapsed, .authorized-app { height: 100px; }
+.developed-app .collapsed { display: none; }
+
+.developed-app .ajax-upload-form {
+    display: none;
+}
+
+.app-details {
+    display: inline-block;
+    width: 200px;
+    height: 72px;
+    margin-left: 1em;
+    vertical-align: top;
+}
+
+.app-details h2 { font-size: medium; margin: 0px; }
+.app-details h3 { font-size: x-small; margin: 0px; }
+
+.app-icon {
+    display: inline-block;
+    width: 72px;
+    height: 72px;
+    line-height: 72px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.app-icon img {
+    vertical-align: middle;
+}
+
+.app-permissions li { position: relative; }
+.app-scope {
+    display: none;
+    position: absolute;
+    top: 1ex;
+    left: 3ex;
+    border: 1px solid black;
+    background: #fffdcc;
+    z-index: 1;
+}
+
+.app-description {
+    display: inline-block;
+    font-size: small;
+    width: 597px;
+    height: 80px;
+    overflow-y: auto;
+    vertical-align: top;
+}
+
+.app-developers {
+    position: absolute;
+    left: 289px;
+    bottom: 1ex;
+    width: 600px;
+}
+
+.edit-app-button, .revoke-app-button {
+    position: absolute;
+    bottom: 1ex;
+    left: 12px;
+    width: 200px;
+}
+
+.edit-app.collapsed, .edit-app-icon, .developed-app .collapsed {
+    display: none;
+}
+
+.edit-app-icon-button { display: block; text-align: center; width: 72px; }
+.edit-app-form, .edit-app-form form { display: inline-block; }
+.edit-app-form th, .edit-app-icon th { width: 12ex; }
+.edit-app-form input, .edit-app-form textarea { margin: 0px; width: 50ex; }
+.edit-app-form input[name="name"] { width: 20ex !important; }
+.edit-app-form input[type="file"] { width: auto !important; }
+.edit-app-form input[type="submit"] {
+    margin-left: 10px;
+    width: auto !important;
+}
+
+.delete-app-button {
+    position: absolute;
+    bottom: 7px;
+    left: 100px;
+}
+
+#create-app { display: none; }
+
+table.diff {font-size: small;}
+.diff_header {background-color:lightgrey}
+.diff_next {background-color:lightgrey}
+.diff_add {background-color:lightgreen}
+.diff_chg {background-color:yellow}
+.diff_sub {background-color:lightcoral}

@@ -40,7 +40,9 @@ function admincheck(elem) {
   var admins = ${unsafe(simplejson.dumps(thing.admins))};
 
   if ($.inArray(elem.value, admins) >= 0) {
-    $(".admin-to").text(elem.value);
+    $(".admin-to")
+      .text(elem.value)
+      .attr('href', '/about/team/#user/' + elem.value);
     $(".clippy").show();
   } else {
     $(".clippy").hide();
@@ -86,15 +88,13 @@ function admincheck(elem) {
 
        Before you click "send", you might want to make sure that
        &#32;
-       <span class="admin-to">${thing.to}</span>
+       <a class="admin-to" href="/about/team/#user/${thing.to}">${thing.to}</a>
        &#32;
-       is the right admin for the job.
-
+       is the right admin for the job. The
        &#32;
-       <a href="http://reddit.com/help/faq#WhichstaffmembershouldIwritetoifIhaveaproblemorquestion">
-         The FAQ has some guidelines</a>
+       <a href="/about/team/">team page</a>
        &#32;
-       about who handles what.
+       has some info about who handles what.
 
        Also:
      </p>
@@ -105,8 +105,8 @@ function admincheck(elem) {
        <li>If you think your posts are being caught in the spam filter,
          please write to
          &#32;
-         <a href="http://reddit.com/help/faq#HowcanItellwhomoderatesagivenreddit">
-          the moderator of the reddit
+         <a href="http://www.reddit.com/help/faq#HowcanItellwhomoderatesagivenreddit">
+          the moderators of the subreddit
          </a>
          &#32;
          instead.
@@ -119,8 +119,8 @@ function admincheck(elem) {
          inquiring about, and that's actually the reason you're writing, please
          message 
          &#32;
-         <a href="http://reddit.com/help/faq#HowcanItellwhomoderatesagivenreddit">
-          all of the moderators of the reddit
+         <a href="http://www.reddit.com/help/faq#HowcanItellwhomoderatesagivenreddit">
+          all of the moderators of the subreddit
          </a>
          &#32; (using the "message the mods" feature located at the top of the
          mod box) with a direct link to the comment page of the submission or other

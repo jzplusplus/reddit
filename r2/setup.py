@@ -26,11 +26,23 @@ use_setuptools()
 
 from setuptools import find_packages
 from distutils.core import setup, Extension
-from Cython.Distutils import build_ext
 import os
 import fnmatch
 
-commands = {"build_ext": build_ext}
+
+commands = {}
+
+
+try:
+    from Cython.Distutils import build_ext
+except ImportError:
+    pass
+else:
+    commands.update({
+        "build_ext": build_ext
+    })
+
+
 try:
     from babel.messages import frontend as babel
     commands.update({
@@ -62,6 +74,7 @@ setup(
     install_requires=[
         "Routes<=1.8",
         "Pylons==0.9.6.2",
+        "webhelpers==0.6.4",
         "boto >= 2.0",
         "pytz",
         "pycrypto",
@@ -80,12 +93,15 @@ setup(
         "pylibmc==1.2.1-dev",
         "py-bcrypt",
         "python-statsd",
-        "snudown",
+        "snudown>=1.1.0",
         "l2cs",
+        "lxml",
+        "kazoo",
     ],
     dependency_links=[
         "https://github.com/downloads/reddit/pylibmc/pylibmc-1.2.1-dev.tar.gz#egg=pylibmc-1.2.1-dev",
-        "https://nodeload.github.com/reddit/snudown/tarball/v1.0.4#egg=snudown-1.0.4",
+        "https://nodeload.github.com/reddit/snudown/tarball/v1.1.0#egg=snudown-1.1.0",
+        "https://nodeload.github.com/reddit/pycassa/zipball/master#egg=pycassa-1.7.0",
     ],
     packages=find_packages(exclude=["ez_setup"]),
     cmdclass=commands,

@@ -20,9 +20,8 @@
 ## reddit Inc. All Rights Reserved.
 ###############################################################################
 
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!doctype html>
 <%!
-
    from r2.lib.template_helpers import static
    from r2.models import Link, Comment, Subreddit
    from r2.lib.tracking import UserInfo
@@ -32,9 +31,7 @@
       xml:lang="${c.lang}" ${c.lang_rtl and unsafe('dir="rtl"') or ''}>
   <head>
     <title>${self.Title()}</title>
-    
     <meta name="keywords" content="${self.keywords()}" />
-    <meta name="title" content="${self.Title()}" />
     <meta name="description" content="${getattr(thing, 'short_description', None) or g.short_description}" />
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
     <meta name="viewport" content="width=1024" />
@@ -43,7 +40,7 @@
     ${self.stylesheet()}
     ${self.javascript()}
     ${js_setup()}
-    
+
     ##things here may depend on globals, or included js, so we run them last
     <script type="text/javascript">
       ${self.javascript_run()}
@@ -54,11 +51,9 @@
 
     ${self.head()}
   </head>
-  
+
   ${self.bodyHTML()}
 </html>
-
-
 
 <%def name="bodyHTML()">
 </%def>

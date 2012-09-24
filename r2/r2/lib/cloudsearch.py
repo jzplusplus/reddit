@@ -47,8 +47,8 @@ ILLEGAL_XML = re.compile(u'[\x00-\x08\x0b\x0c\x0e-\x1F\uD800-\uDFFF\uFFFE\uFFFF]
 
 
 def _safe_xml_str(s, use_encoding="utf-8"):
-    '''Replace invalid-in-XML unicode control characters with '?'.
-    Also, coerces 's' to unicode
+    '''Replace invalid-in-XML unicode control characters with '\uFFFD'.
+    Also, coerces result to unicode
     
     '''
     if not isinstance(s, unicode):
@@ -252,11 +252,12 @@ class LinkUploader(CloudSearchUploader):
                   "subreddit": sr.name,
                   "reddit": sr.name,
                   "title": thing.title,
-                  "timestamp": thing._date.strftime("%s"),
+                  "timestamp": int(time.mktime(thing._date.utctimetuple())),
                   "sr_id": thing.sr_id,
                   "over18": 1 if nsfw else 0,
                   "is_self": 1 if thing.is_self else 0,
                   "author_fullname": account._fullname,
+                  "type_id": thing._type_id
                   }
         
         if account._deleted:
@@ -272,8 +273,7 @@ class LinkUploader(CloudSearchUploader):
             fields['url'] = thing.url
             try:
                 url = r2utils.UrlParser(thing.url)
-                domains = ' '.join(url.domain_permutations())
-                fields['site'] = domains
+                fields['site'] = list(url.domain_permutations())
             except ValueError:
                 # UrlParser couldn't handle thing.url, oh well
                 pass
@@ -319,15 +319,16 @@ class SubredditUploader(CloudSearchUploader):
     def fields(self, thing):
         fields = {'name': thing.name,
                   'title': thing.title,
-                  'type': thing.type, # XXX Int type?
+                  'type': thing.type,
                   'language': thing.lang,
                   'header_title': thing.header_title,
                   'description': thing.public_description,
                   'sidebar': thing.description,
-                  'over18': thing.over_18, # Reminder: copy-field to nsfw
-                  'link_type': thing.link_type, # XXX Use integer?
+                  'over18': thing.over_18,
+                  'link_type': thing.link_type,
                   'activity': thing._downs,
                   'subscribers': thing._ups,
+                  'type_id': thing._type_id
                   }
         return fields
     
@@ -477,46 +478,56 @@ def test_run_srs(*sr_names):
 
 ### Query Code ###
 class Results(object):
-    __slots__ = ["docs", "hits", "facets"]
-    
     def __init__(self, docs, hits, facets):
         self.docs = docs
         self.hits = hits
-        self.facets = facets
+        self._facets = facets
+        self._subreddits = []
     
     def __repr__(self):
         return '%s(%r, %r, %r)' % (self.__class__.__name__,
                                    self.docs,
                                    self.hits,
-                                   self.facets)
-
-
-def _to_fn(cls, id_):
-    '''Convert id_ to a fullname (equivalent to "link._fullname", but doesn't
-    require an instance of the class)
+                                   self._facets)
     
-    '''
-    return (cls._type_prefix + r2utils.to36(cls._type_id) + '_' +
-            r2utils.to36(id_))
+    @property
+    def subreddit_facets(self):
+        '''Filter out subreddits that the user isn't allowed to see'''
+        if not self._subreddits and 'reddit' in self._facets:
+            sr_facets = [(sr['value'], sr['count']) for sr in
+                         self._facets['reddit']]
+
+            # look up subreddits
+            srs_by_name = Subreddit._by_name([name for name, count
+                                              in sr_facets])
+
+            sr_facets = [(srs_by_name[name], count) for name, count
+                         in sr_facets if name in srs_by_name]
+
+            # filter by can_view
+            self._subreddits = [(sr, count) for sr, count in sr_facets
+                                if sr.can_view(c.user)]
+
+        return self._subreddits
 
 
 _SEARCH = "/2011-02-01/search?"
 INVALID_QUERY_CODES = ('CS-UnknownFieldInMatchExpression',
-                       'CS-InvalidMatchSetExpression',
                        'CS-IncorrectFieldTypeInMatchExpression',
                        'CS-InvalidMatchSetExpression',)
-def basic_query(query=None, bq=None, facets=("reddit",), facet_count=10,
-                size=1000, start=0, rank="hot", return_fields=None,
-                record_stats=False, search_api=None):
+DEFAULT_FACETS = {"reddit": {"count":20}}
+def basic_query(query=None, bq=None, faceting=None, size=1000,
+                start=0, rank="-relevance", return_fields=None, record_stats=False,
+                search_api=None):
     if search_api is None:
         search_api = g.CLOUDSEARCH_SEARCH_API
-    path = _encode_query(query, bq, facets, facet_count, size, start, rank,
-                         return_fields)
+    if faceting is None:
+        faceting = DEFAULT_FACETS
+    path = _encode_query(query, bq, faceting, size, start, rank, return_fields)
     timer = None
     if record_stats:
         timer = g.stats.get_timer("cloudsearch_timer")
-        if timer:
-            timer.start()
+        timer.start()
     connection = httplib.HTTPConnection(search_api, 80)
     try:
         connection.request('GET', path)
@@ -539,14 +550,14 @@ def basic_query(query=None, bq=None, facets=("reddit",), facet_count=10,
                                        response)
     finally:
         connection.close()
-        if timer:
+        if timer is not None:
             timer.stop()
     
     return json.loads(response)
 
 
-basic_link = functools.partial(basic_query, facets=("reddit",), facet_count=10,
-                               size=10, start=0, rank="hot",
+basic_link = functools.partial(basic_query, size=10, start=0,
+                               rank="-relevance",
                                return_fields=['title', 'reddit',
                                               'author_fullname'],
                                record_stats=False,
@@ -554,7 +565,7 @@ basic_link = functools.partial(basic_query, facets=("reddit",), facet_count=10,
 
 
 basic_subreddit = functools.partial(basic_query,
-                                    facets=(),
+                                    faceting=None,
                                     size=10, start=0,
                                     rank="-activity",
                                     return_fields=['title', 'reddit',
@@ -563,8 +574,7 @@ basic_subreddit = functools.partial(basic_query,
                                     search_api=g.CLOUDSEARCH_SUBREDDIT_SEARCH_API)
 
 
-def _encode_query(query, bq, facets, facet_count, size, start, rank,
-                  return_fields):
+def _encode_query(query, bq, faceting, size, start, rank, return_fields):
     if not (query or bq):
         raise ValueError("Need query or bq")
     params = {}
@@ -576,10 +586,12 @@ def _encode_query(query, bq, facets, facet_count, size, start, rank,
     params["size"] = size
     params["start"] = start
     params["rank"] = rank
-    if facets:
-        params["facet"] = ",".join(facets)
-        for facet in facets:
-            params["facet-%s-top-n" % facet] = facet_count
+    if faceting:
+        params["facet"] = ",".join(faceting.iterkeys())
+        for facet, options in faceting.iteritems():
+            params["facet-%s-top-n" % facet] = options.get("count", 20)
+            if "sort" in options:
+                params["facet-%s-sort" % facet] = options["sort"]
     if return_fields:
         params["return-fields"] = ",".join(return_fields)
     encoded_query = urllib.urlencode(params)
@@ -596,12 +608,13 @@ class CloudSearchQuery(object):
     default_syntax = "plain"
     lucene_parser = None
     
-    def __init__(self, query, sr=None, sort=None, syntax=None, raw_sort=None):
+    def __init__(self, query, sr=None, sort=None, syntax=None, raw_sort=None,
+                 faceting=None):
         if syntax is None:
             syntax = self.default_syntax
         elif syntax not in self.known_syntaxes:
             raise ValueError("Unknown search syntax: %s" % syntax)
-        self.query = query.encode("utf-8") if query else ''
+        self.query = filters._force_unicode(query or u'')
         self.converted_data = None
         self.syntax = syntax
         self.sr = sr
@@ -610,7 +623,8 @@ class CloudSearchQuery(object):
             self.sort = raw_sort
         else:
             self.sort = self.sorts[sort]
-        self.bq = ''
+        self.faceting = faceting
+        self.bq = u''
         self.results = None
     
     def run(self, after=None, reverse=False, num=1000, _update=False):
@@ -619,7 +633,7 @@ class CloudSearchQuery(object):
         
         results = self._run(_update=_update)
         
-        docs, hits, facets = results.docs, results.hits, results.facets
+        docs, hits, facets = results.docs, results.hits, results._facets
         
         after_docs = r2utils.get_after(docs, after, num, reverse=reverse)
         
@@ -634,13 +648,14 @@ class CloudSearchQuery(object):
         elif self.syntax == "lucene":
             bq = l2cs.convert(self.query, self.lucene_parser)
             self.converted_data = {"syntax": "cloudsearch",
-                                   "converted": filters._force_unicode(bq)}
+                                   "converted": bq}
             self.bq = self.customize_query(bq)
         elif self.syntax == "plain":
-            q = self.query
+            q = self.query.encode('utf-8')
         if g.sqlprinting:
             g.log.info("%s", self)
-        return self._run_cached(q, self.bq, self.sort, start=start, num=num,
+        return self._run_cached(q, self.bq.encode('utf-8'), self.sort,
+                                self.faceting, start=start, num=num,
                                 _update=_update)
     
     def customize_query(self, bq):
@@ -659,8 +674,8 @@ class CloudSearchQuery(object):
         return ''.join(result)
     
     @classmethod
-    def _run_cached(cls, query, bq, sort="relevance", start=0, num=1000,
-                    _update=False):
+    def _run_cached(cls, query, bq, sort="relevance", faceting=None, start=0,
+                    num=1000, _update=False):
         '''Query the cloudsearch API. _update parameter allows for supposed
         easy memoization at later date.
         
@@ -697,7 +712,7 @@ class CloudSearchQuery(object):
         '''
         response = basic_query(query=query, bq=bq, size=num, start=start,
                                rank=sort, search_api=cls.search_api,
-                               record_stats=True)
+                               faceting=faceting, record_stats=True)
         
         warnings = response['info'].get('messages', [])
         for warning in warnings:
@@ -717,18 +732,22 @@ class CloudSearchQuery(object):
 class LinkSearchQuery(CloudSearchQuery):
     search_api = g.CLOUDSEARCH_SEARCH_API
     sorts = {'relevance': '-relevance',
+             'hot': '-hot2',
              'top': '-top',
              'new': '-timestamp',
+             'comments': '-num_comments',
              }
     sorts_menu_mapping = {'relevance': 1,
-                          'new': 2,
-                          'top': 3,
+                          'hot': 2,
+                          'new': 3,
+                          'top': 4,
+                          'comments': 5,
                           }
     
     lucene_parser = l2cs.make_parser(int_fields=['timestamp'],
                                      yesno_fields=['over18', 'is_self',
                                                    'nsfw', 'self'])
-    known_syntaxes = ("cloudsearch", "lucene")
+    known_syntaxes = ("cloudsearch", "lucene", "plain")
     default_syntax = "lucene"
     
     def customize_query(self, bq):
@@ -778,7 +797,8 @@ class LinkSearchQuery(CloudSearchQuery):
             # The query limit is roughly 8k bytes. Limit to 200 friends to
             # avoid getting too close to that limit
             friend_ids = c.user.friends[:200]
-            friends = ["author_fullname:'%s'" % _to_fn(Account, id_)
+            friends = ["author_fullname:'%s'" %
+                       Account._fullname_from_id36(r2utils.to36(id_))
                        for id_ in friend_ids]
             bq.extend(friends)
             bq.append(")")

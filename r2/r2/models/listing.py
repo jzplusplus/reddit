@@ -98,6 +98,8 @@ class TableListing(Listing): pass
 
 class ModActionListing(TableListing): pass
 
+class WikiRevisionListing(TableListing): pass
+
 class LinkListing(Listing):
     def __init__(self, *a, **kw):
         Listing.__init__(self, *a, **kw)
@@ -133,8 +135,8 @@ class SpotlightListing(Listing):
         self.show_nums  = True
         self._parent_max_num   = kw.get('max_num', 0)
         self._parent_max_score = kw.get('max_score', 0)
-        self.spotlight_links  = kw.get('spotlight_links', [])
-        self.visible_link = kw.get('visible_link', '')
+        self.spotlight_items  = kw.get('spotlight_items', [])
+        self.visible_item = kw.get('visible_item', '')
 
     @property
     def max_score(self):
@@ -149,4 +151,5 @@ class SpotlightListing(Listing):
         # suppress item numbering
         for t in res.things:
             t.num = ""
+        self.lookup = {t._fullname : t for t in self.things}
         return res

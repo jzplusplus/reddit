@@ -21,25 +21,26 @@
 ###############################################################################
 
 <%namespace file="printablebuttons.html" import="ynbutton"/>
+<%namespace file="utils.html" import="tags, text_with_links"/>
 <% 
    from r2.lib.template_helpers import static
+   from r2.lib.wrapped import Templated
 %>
 
 <div id="siteTable_organic" class="organic-listing">
   <%
-     lookup = dict((t._fullname, t) for t in thing.things)
      seen = set([])
    %>
-  <script type="text/javascript">
-    ## fortunately, python arrays print in JS-compatible form.
-    var organic_links = ${thing.spotlight_links};
-  </script>
-  %for name in thing.spotlight_links:
-    %if name in seen:
+  %for name in thing.spotlight_items:
+    %if isinstance(name, Templated):
+      <div class="thing ${type(name).__name__.lower()}" ${tags(style="display:none" if thing.visible_item != name else None)}>
+        ${unsafe(name.render())}
+      </div>
+    %elif name in seen:
       <% pass %>
-    %elif lookup.has_key(name):
+    %elif name in thing.lookup:
       <% seen.add(name) %>
-      ${unsafe(lookup[name].render(display = (thing.visible_link == name)))} 
+      ${unsafe(thing.lookup[name].render(display = (thing.visible_item == name)))}
     %else:
       <div class="thing id-${name} stub" style="display:none"></div>
     %endif
@@ -49,94 +50,48 @@
     <button class="arrow prev" onclick="get_organic(this, false)">prev</button>
     <button class="arrow next" onclick="get_organic(this, true)">next</button>
   </div>
-  
-  <div class="help">
-    <a class="open" href="javascript:void(0)">${_("what's this?")}</a>
-  </div>
-</div>
 
-<%
-  fmt = _("Click %(here)s to close help.")
-  title = _("here")
-  link = '<a class="close" href="javascript:void(0)">%s</a>' % title
-  link = (fmt % dict(here = link))
-  link = unsafe(link.replace(" <", "&#32;<").replace("> ", ">&#32;"))
-%>
-
-<div class="help help-cover juryduty">
-    <p>
-      ${_("Sometimes reddit needs to ask the community to help fight spam. This is your chance to take part in that.")}
-      &#32;
-      <a href="/help/deputies">
-        ${_("Click here for more info.")}
-      </a>
-    </p>
-    ${ynbutton(_("here"), _("This element has been disabled."),
-               "disable_ui", callback = "disappear_help",
-               format = _("Click %(here)s to disable this feature."),
-               format_arg = "here",
-               hidden_data = dict(id="organic"))}
-    ${link}
-</div>
-
-<div class="help help-cover promoted">
-    <p>
-      This sponsored link is an advertisement generated with our&#32;<a href="http://www.reddit.com/help/selfservicepromotion">self-serve advertisement tool.</a>&#32.  
-    </p>
-    <p>
-      Use of this tool is open to all members or reddit.com, and for as little as $20 you can advertise in this area.&#32;<a href="/ad_inq">Get started &raquo;</a>
-    </p>
-    <p>
-      ${link}
-    </p>
-</div>
-
-<div class="help help-cover organic">
-    <p>
-      ${_("This area shows new and upcoming links. Vote on" +
-            " links here to help them become popular, and click" +
-            " the forwards and backwards buttons to view more. ")}
-    </p>
+  <div class="help help-hoverable">
+    ${_("what's this?")}
+    <div id="spotlight-help" class="help-bubble">
+      <div class="help-section help-promoted">
+        <p>
+          ${text_with_links(
+            _("This sponsored link is an advertisement generated with our %(self_serve_advertisement_tool)s."),
+              self_serve_advertisement_tool=dict(link_text=_("self-serve advertisement tool"), path="http://www.reddit.com/help/selfservicepromotion")
+          )}
+        </p>
+        <p>
+          ${text_with_links(
+            _("Use of this tool is open to all members of reddit.com, and for as little as $20 you can advertise in this area. %(get_started)s"),
+              get_started=dict(link_text=unsafe(_("Get started &rsaquo;")), path="/ad_inq")
+          )}
+        </p>
+      </div>
+      <div class="help-section help-organic">
+        <p>
+          ${_("This area shows new and upcoming links. Vote on" +
+                " links here to help them become popular, and click" +
+                " the forwards and backwards buttons to view more. ")}
+        </p>
         %if c.user_is_loggedin:
           ${ynbutton(_("here"), _("This element has been disabled."),
-                     "disable_ui", callback = "disappear_help",
+                     "disable_ui",
                      format = _("Click %(here)s to disable this feature."),
                      format_arg = "here",
                      hidden_data = dict(id="organic"))}
-        %else:
-         <p>
         %endif
-           ${link}
-        %if not c.user_is_loggedin:
-         </p>
-        %endif
+      </div>
+      <div class="help-section help-interestbar">
+        <p>${_("Enter a keyword or topic to discover new subreddits around your interests. Be specific!")}</p>
+        <p>
+          ${text_with_links(
+            _("You can access this tool at any time on the %(reddits)s page."),
+              reddits=dict(link_text="/reddits/", path="/reddits/")
+          )}
+        </p>
+      </div>
+    </div>
+  </div>
 </div>
-
-<script type="text/javascript">
-    function disappear_help(elem) {
-       $(elem).parents(".help:first").parent().html(
-                 "${_('The new link area will no longer appear for you.' +
-                      ' To re-enable it, visit your preferences.')}");
-    }
-    $(function() {
-        $(".help")
-            .find("a.open").click(function() {
-               var l = $(this).parents(".organic-listing").hide();
-               if (l.find(".thing:visible").hasClass("promoted")) {
-                    l.siblings(".help.promoted").show();
-               } else if (l.find(".thing:visible").hasClass("ontrial")) {
-                    l.siblings(".help.juryduty").show();
-               } else {
-                    l.siblings(".help.organic").show();
-               }
-            }).end()
-            .find("a.close").click(function() {
-              $(this).parents(".spacer")
-                 .find(".help-cover").hide();
-              $(this).parents(".spacer")
-                .find(".organic-listing").show();
-            });
-      });
-</script>
-
 
