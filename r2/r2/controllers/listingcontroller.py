@@ -377,7 +377,7 @@ class HotController(FixListing, ListingController):
     def content(self):
         # only send a spotlight listing for HTML rendering
         if c.render_style == "html":
-            spotlight = self.spotlight()
+            spotlight = None #self.spotlight()
             if spotlight:
                 return PaneStack([spotlight, self.listing_obj], css_class='spacer')
         return self.listing_obj
