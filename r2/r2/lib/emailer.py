@@ -143,8 +143,14 @@ def send_queued_mail(test = False):
 
     clear = False
     if not test:
-        session = smtplib.SMTP(g.smtp_server)
+        session = smtplib.SMTP('smtp.gmail.com', 587)
+        session.ehlo()
+        session.starttls()
+        session.ehlo
+        session.login(g.gmail_username, g.gmail_password)
+    
     def sendmail(email):
+        email.fr_addr = g.gmail_username
         try:
             mimetext = email.to_MIMEText()
             if mimetext is None:
@@ -256,9 +262,13 @@ def send_html_email(to_addr, from_addr, subject, html, subtype="html"):
     from r2.lib.filters import _force_utf8
     msg = MIMEText(_force_utf8(html), subtype)
     msg["Subject"] = subject
-    msg["From"] = from_addr
+    msg["From"] = g.gmail_username
     msg["To"] = to_addr
 
-    session = smtplib.SMTP(g.smtp_server)
-    session.sendmail(from_addr, to_addr, msg.as_string())
+    session = smtplib.SMTP('smtp.gmail.com', 587)
+    session.ehlo()
+    session.starttls()
+    session.ehlo
+    session.login(g.gmail_username, g.gmail_password)
+    session.sendmail(g.gmail_username, toaddr, msg.as_string())
     session.quit()
