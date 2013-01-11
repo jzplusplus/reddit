@@ -50,16 +50,12 @@ a:active { border: 0 none;}
 a:focus { -moz-outline-style: none; }
 */
 
-.rounded {  
-    -moz-border-radius: 7px;
-    -webkit-border-radius: 7px;
+.rounded {
     border-radius: 7px;
 }
 
 .rounded .morelink {
-    -webkit-border-top-right-radius: 6px;
     border-top-right-radius: 6px;
-    -moz-border-radius-topright: 6px;
 }
 
 
@@ -81,8 +77,6 @@ label.disabled { color: gray; }
     font-weight: bold;
     border: solid 1px #ff6600;
     padding: 3px;
-    -moz-border-radius: 7px;
-    -webkit-border-radius: 7px;
     border-radius: 7px;
 }
 
@@ -106,8 +100,6 @@ label.disabled { color: gray; }
     background: -moz-linear-gradient(top, hsl(210, 54%, 89%), hsl(210, 54%, 79%));
     background-color: #ADC9E6;
     border: 1px solid #5E96CF;
-    -webkit-border-radius: 7px;
-    -moz-border-radius: 7px;
     border-radius: 7px;
     -webkit-background-clip: padding-box;
     -moz-background-clip: padding-box;
@@ -166,7 +158,7 @@ ul.flat-vert {text-align: left;}
     margin-bottom: 5px;
  }
 
-.separator { color: gray; margin: 0px .7ex 0px .7ex}
+.separator { color: gray; margin: 0px .7ex 0px .7ex; cursor: default; }
 
 .pref-lang { font-weight: bold; }
 .pref { font-weight: bold; }
@@ -211,8 +203,6 @@ ul.flat-vert {text-align: left;}
     background-color: #EFF7FF;
     padding: 4px;
     line-height: 12px;
-    -moz-border-radius-topleft: 7px;
-    -webkit-border-top-left-radius: 7px;
     border-top-left-radius: 7px;
  }
 
@@ -410,9 +400,6 @@ ul.flat-vert {text-align: left;}
     display:block;
     text-align: center;
     position: relative;
-
-    -moz-border-radius-topleft: 6px;
-    -moz-border-radius-bottomleft: 6px;
 
     border: 1px solid #c4dbf1;
 
@@ -622,6 +609,7 @@ ul.flat-vert {text-align: left;}
     width: 15px;
     margin-left: auto;
     margin-right: auto; 
+    outline: none;
 }
 
 .arrow.upmod { 
@@ -954,192 +942,12 @@ a.author { margin-right: 0.5em; }
     margin: 5px;
 }
 
-.wiki-page-content {
-    margin: 15px;
-}
-
-.wikirevisionlisting .generic-table {
-    width: 100%;
-}
-
-.wikititle strong {
-    font-weight: bold;
-}
-
-.wikititle {
-    margin-left: 15px;
-    color: #666;
-}
-
-.wiki-page .md {
-    word-wrap: break-word;
-    max-width: none;
-}
-
-.wiki-page .fancy-settings .toggle {
-    display: inline-block;
-    padding-right: 15px;
-}
-
-.wiki-page input {
-    margin: 5px;
-    padding: 2px;
-    margin-left: 0;
-}
-
-.wiki-page-content {
-    margin-right: 325px;
-}
-.discussionlink {
-    display: inline-block;
-    margin-left: 15px;
-    padding-right: 50px;
-}
-
-.discussionlink a {
-    padding-left: 15px;
-}
-
-.wikirevisionlisting table tr td {
-    padding-right: 15px;
-}
-
-.wiki-page .pagelisting ul {
-    list-style: disc;
-    padding: 2px;
-    padding-left: 10px;
-}
-
-.wiki-page .revision {
-    transition: opacity 500ms;
-    -o-transition: opacity 500ms;
-    -ms-transition: opacity 500ms;
-    -moz-transition: opacity 500ms;
-    -webkit-transition: opacity 500ms;
-}
-
-.wiki-page .revision.hidden {
-    opacity: .5;
-}
-
 .wikiaction-revisions::before {
     background-image: url(../report.png); /* SPRITE */
 }
 
 .wikiaction-pages::before {
     background-image: url(../page_white_copy.png); /* SPRITE */
-}
-
-.pageactions {
-    display: inline-block;
-    font-size: larger;
-    margin-left: 25px;
-    border-radius: 5px;
-    border: 1px solid #8D9CAA;
-    vertical-align: middle;
-}
-
-.wikiaction {
-    display: inline-block;
-    margin: 2px;
-    padding-top: 2px;
-    padding-bottom: 3px;
-    border-radius: 3px;
-}
-
-.wikititle {
-    display: inline;
-    vertical-align: middle;
-}
-
-.pageactions .wikiaction {
-    padding-right: 10px;
-    padding-left: 10px;
-}
-
-.pageactions .wikiaction:hover {
-    background-color: #CEE3F8;
-}
-
-.pageactions .wikiaction-current:hover {
-    background-color: #5F99CF;
-}
-
-.pageactions .wikiaction-current {
-    color: white;
-    background-color: #5F99CF;
-}
-
-/* wiki table of contents */
-
-.md.wiki ul:first-child {
-    float: right;
-    padding: 10px 25px;
-    margin-right: 0;
-    border: 1px solid #8D9CAA;
-    list-style: none;
-}
-
-.md.wiki ul:first-child ul {
-    margin: 4px 0;
-    padding-left: 25px;
-    border-left: 1px dotted #cce;
-    list-style: none;
-}
-
-/* wiki content */
-
-.md.wiki p, .md.wiki blockquote {
-    margin: .75em 0;
-}
-
-.md.wiki blockquote {
-    padding-left: 1em;
-}
-
-.md.wiki h1,
-.md.wiki h2,
-.md.wiki h3,
-.md.wiki h4,
-.md.wiki h5,
-.md.wiki h6 {
-    font-weight: bold;
-    color: black;
-    margin-bottom: .25em;
-    margin-top: .5em;
-}
-
-.md.wiki h1 {
-    margin-top: .75em;
-    font-size: 2.4em;
-}
-
-.md.wiki ul:first-child + h1 {
-    margin-top: 0;
-}
-
-.md.wiki h2 {
-    margin-top: .75em;
-    font-size: 1.8em;
-}
-
-.md.wiki h3 {
-    font-size: 1.6em;
-}
-
-.md.wiki h4 {
-    font-size: 1.4em;
-    color: #333;
-}
-
-.md.wiki h5 {
-    font-size: 1.2em;
-    color: #444;
-}
-
-.md.wiki h6 {
-    font-size: 1.05em;
-    color: #666;
 }
 
 /* organic listing */
@@ -1289,8 +1097,6 @@ a.author { margin-right: 0.5em; }
     color: #6a4d00;
     border: 1px solid #9a7d2e;
     padding: 1px 5px;
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 }
 
@@ -1342,6 +1148,80 @@ a.author { margin-right: 0.5em; }
     border: 1px solid #bfe0ff;
 }
 
+.infobar.gold {
+    background-color: #fffdcc;
+    border: 1px solid #e1b000;
+    color: #9a7d2e;
+}
+
+.content .infobar.gold:before {
+    margin-top: 5px;
+    margin-right: 7px;
+}
+
+.infobar.welcome {
+    background: url(../welcome-lines.png) top center;
+    border: 1px solid #ff8b60;
+    padding: 0;
+    height: 80px;
+    overflow: hidden;
+    margin-right: 0;  /* work around safari 5 width issue */
+    white-space: nowrap;
+}
+
+.infobar.welcome h1, .infobar.welcome h2 {
+    display: inline-block;
+    font-weight: normal;
+    margin: 0;
+}
+
+.infobar.welcome h1 {
+    margin-top: 14px;
+    margin-left: 2%;
+    padding: 7px 16px;
+    font-size: 16px;
+    background: white;
+    border-bottom: 2px solid #5f99cf;
+}
+
+.infobar.welcome .button-row {
+    position: relative;
+    top: -8px;
+    margin-left: 10%;
+}
+
+.infobar.welcome h2 {
+    padding: 4px 14px;
+    padding-left: 38px;
+    background: white url(../welcome-upvote.png) 12px center no-repeat;
+    font-size: 13px;
+    color: #222;
+    border-bottom: 2px solid #ff4500;
+}
+
+.infobar.welcome a {
+    margin-left: 2%;
+    background: #e75018;
+    font-size: 11px;
+    font-weight: bold;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    border-bottom: 2px solid #a73a11;
+}
+
+.infobar.welcome a:hover {
+    background: #f0571e;
+    border-bottom-color: #c74514;
+}
+
+.infobar.welcome a:active {
+    position: relative;
+    top: 1px;
+    background: #df531f;
+    border-bottom: 1px solid #a73a11;
+}
+
 /* markdown */
 .md { max-width: 60em; overflow: auto; font-size: small; }
 .md p, .md h1 { margin: 5px 0}
@@ -1351,7 +1231,6 @@ a.author { margin-right: 0.5em; }
 .md em { font-style: italic; }
 .md strong em { font-style: italic; font-weight: bold }
 .md img { display: none }
-.md.wiki img { display: block }
 .md ol, .md ul { margin: 10px 2em; }
 .md ul { list-style: disc outside }
 .md ol { list-style: decimal outside }
@@ -1701,8 +1580,6 @@ textarea.gray { color: gray; }
     background-color:#fffdd7;
     border: solid black 1px;
     width: 350px;
-    -moz-border-radius: 5px;
-    -webkit-border-radius: 5px;
     border-radius: 5px;
     margin-left: 5px;
     margin-bottom: 15px;
@@ -1746,8 +1623,6 @@ textarea.gray { color: gray; }
     font-weight: bold;
 
     line-height: 20px;
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 }
 
@@ -1935,11 +1810,18 @@ textarea.gray { color: gray; }
 
 #noresults { margin-right: 310px;  }
 
-#ad-frame {
+#ad-frame, #ad_main {
     border: 0px;
     overflow: hidden;
     width: 300px;
     height: 280px;
+}
+
+#ad_sponsorship {
+    border: 0px;
+    overflow: hidden;
+    width: 300px;
+    height: 100px;
 }
 
 
@@ -1962,8 +1844,6 @@ textarea.gray { color: gray; }
 #searchexpando {
     display: none;
     margin: 5px 0 0 0;
-    -moz-border-radius:3px;
-    -webkit-border-radius:3px;
     border-radius:3px;
 }
 
@@ -2199,10 +2079,9 @@ li.searchfacet {
 }
 
 .popup h1 {
-    text-align: center;
-    font-size: large; 
+    font-size: large;
     font-weight: normal;
-    color: orangered;
+    margin-left: 1em;
 }
 
 .popup h2 {
@@ -2213,9 +2092,9 @@ li.searchfacet {
     font-weight: normal;
 }
 
-.popup .close-popup {
-    text-align: center;
-    margin-top: 10px;
+.popup .hidecover {
+    float: right;
+    margin-right: 3px;
 }
 
 .usertable { margin-left: 10px;} 
@@ -2223,27 +2102,24 @@ li.searchfacet {
 .usertable td, .usertable th { padding: 0 .7em }
 .usertable { white-space: nowrap }
 
-.usertable .remove-self {
+.usertable .moderator.toggle {
     display: inline-block;
     margin: 1em 0 .5em;
     padding: 11px 15px;
     border: 1px solid #bbb;
     border-radius: 2px;
-}
-
-.usertable .moderator.remove-self {
     background: #fdffe8;
 }
 
-.usertable .remove-self .option.main:before {
+.usertable .moderator.toggle .option.main:before {
     margin-right: 7px;
 }
 
-.usertable .remove-self .option {
+.usertable .moderator.toggle .option {
     display: inline;
 }
 
-.usertable .remove-self .togglebutton, .usertable .remove-self .error {
+.usertable .moderator.toggle .togglebutton, .usertable .moderator.toggle .error {
     display: none;
     font-size: inherit;
     border-left: 1px solid #bbb;
@@ -2252,11 +2128,11 @@ li.searchfacet {
     margin-left: 10px;
 }
 
-.usertable .remove-self .active .togglebutton {
+.usertable .moderator.toggle .active .togglebutton {
     display: inline;
 }
 
-.usertable .remove-self .error.active {
+.usertable .moderator.toggle .error.active {
     display: inline;
 }
 
@@ -2651,8 +2527,6 @@ body.rulespage-body {
     margin-top: 4px;
     padding: 1px 3px;
 
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 
     display: none;
@@ -2728,8 +2602,6 @@ button.button[disabled] {
     color: gray;
     text-align: center;
     margin: 0px;
-    -moz-border-radius: 4px;
-    -webkit-border-radius: 4px;
     border-radius: 4px;
     background-color:white;
 }
@@ -3202,6 +3074,19 @@ form input[type=radio] {margin: 2px .5em 0 0; }
 #url-field button {margin: 10px 5px 0 0;}
 #url-field .title-status { color: red; font-size: small}
 
+.content.submit .info-notice {
+    background-color: #E4F2FB;
+    border: 1px solid #5F99CF;
+    padding: 9px;
+    margin-bottom: 12px;
+    font-size: larger;
+}
+
+.content.submit .info-notice a {
+    font-weight: bold;
+    text-decoration: underline;
+}
+
 /*opt-out/in form*/
 .opt-form { font-size: larger }
 .opt-form form { display: inline; }
@@ -3235,23 +3120,13 @@ form input[type=radio] {margin: 2px .5em 0 0; }
     text-decoration: none;
     padding: 0 2px;
     border: 1px solid #d27979 !important;
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 }
 
-.entry .buttons li.trial-stamp, .entry .buttons li.reported-stamp {
+.entry .buttons li.reported-stamp {
     border: 1px solid black !important;
     padding: 0 4px;
     background-color: #f6e69f;
-}
-
-.entry .buttons li.trial-stamp .spam {
-    color: #e00;
-}
-
-.entry .buttons li.trial-stamp .kosher {
-    color: #090;
 }
 
 .suspicious { background-color: #f6e69f }
@@ -3327,7 +3202,7 @@ form input[type=radio] {margin: 2px .5em 0 0; }
 /* CSS customisation page */
 
 .stylesheet-customize-container { }
-.stylesheet-customize-container textarea { margin: 0; padding: 0px; }
+.stylesheet-customize-container textarea { font-family: "Bitstream Vera Sans Mono", Consolas, monospace; margin: 0; padding: 0px; }
 .stylesheet-customize-container h2 { margin-top: 15px; margin-bottom: 10px;  }
 
 .image-upload .new-image { margin-left: 20px }
@@ -3767,8 +3642,6 @@ ul.tabmenu.formtab {
     padding: 2px 5px;
     background-color: #fafafa;
     border: 1px solid #CCC;
-    -moz-border-radius: 7px;
-    -webkit-border-radius: 7px;
     border-radius: 7px;
 }
 
@@ -3776,8 +3649,6 @@ ul.tabmenu.formtab {
     padding: 0 5px;
     background-color: #fafafa;
     border: 1px solid #369;
-    -moz-border-radius: 7px;
-    -webkit-border-radius: 7px;
     border-radius: 7px;
 }
 
@@ -3846,8 +3717,6 @@ ul.tabmenu.formtab {
 .roundfield {
     width: 500px;
     background-color: #cee3f8;
-    -moz-border-radius: 4px;
-    -webkit-border-radius: 4px;
     border-radius: 4px;
     padding: 5px 10px 10px 10px;
     font-size: large;
@@ -3868,6 +3737,7 @@ ul.tabmenu.formtab {
 
 .roundfield textarea,
 .roundfield input[type=text],
+.roundfield input[type=url],
 .roundfield input[type=password],
 .roundfield input[type=number] {
     font-size: 100%;
@@ -4070,8 +3940,6 @@ ul.tabmenu.formtab {
 }
 .campaign .targeting input{
     width: 95%;
-    -webkit-border-radius: 7px;
-    -moz-border-radius: 7px;
     border-radius: 7px;
 }
 
@@ -4184,6 +4052,92 @@ div.timeseries span.title {
     padding-top: .3em;
 }
 
+.promocampaign-table td {
+    white-space: nowrap;
+}
+
+.promo-traffic .content .tabmenu li {
+    font-size: 1.3em;
+}
+
+.promo-traffic #helptext {
+    font-size: 1.2em;
+    padding: 3px 10px 6px;
+}
+
+#promo-traffic-no-campaigns {
+    padding: 20px;
+}
+
+.promo-traffic .tabpane-content {
+    margin-right: 305px;
+    min-width: 800px;
+    position: relative;
+}
+
+.promo-traffic #timeseries-unprocessed {
+    font-size: 1.2em;
+    margin: 0 .1em;
+    padding: 0px;
+    position: absolute;
+    right: 1em;
+    top: -1.3em;
+}
+
+.promo-traffic-csv-link {
+    font-size: 1.1em;
+    font-weight: bold;
+    position: absolute;
+    right: 15px;
+    top: 11px;
+}
+
+.promo-traffic-help {
+    font-size: 1.2em;
+    margin: 20px;
+}
+
+.promo-traffic-help p {
+    padding: 5px;
+}
+
+#promo-traffic-lifetime-stats {
+    font-size: 1.1em;
+    font-weight: bold;
+    margin: 2px 10px;
+    padding-top: 5px;
+}
+
+.promo-traffic-live {
+    background-color: #EFF7FF;
+}
+
+.promo-traffic-settings-instructions {
+    font-size: small;
+    margin: 0px 15px 10px;
+}
+
+.promo-traffic-settings {
+    padding: 20px;
+}
+
+.promo-admin-form {
+    padding: 10px;
+}
+ 
+.promo-admin-form button {
+    margin-bottom: 10px;
+}
+ 
+.promo-admin-data th {
+    font-weight: bold;
+}
+ 
+.promo-admin-data td, .promo-admin-data th {
+    padding: 1px 4px;
+    white-space: nowrap;
+}
+
 p.totals-are-preliminary {
     margin-left: 10px;
 }
@@ -4272,6 +4226,7 @@ table.lined-table {
 .sponsorshipbox div { 
     border: 1px solid #D0D0D0; 
     width: 300px; 
+    font-size: 0;
 }
 
 /* otherwise the pixel will cause a horizontal scrollbar in firefox */
@@ -4351,8 +4306,6 @@ table.lined-table {
 .datepicker {
     z-index: 1000; 
     display: none;
-    -moz-border-radius: 6px;
-    -webkit-border-radius: 6px;
     border-radius: 6px;
     -webkit-box-shadow: 0px 4px 6px 3px hsla(0, 0%, 0%, .2), inset 0px 1px 0px 0px hsla(0, 0%, 100%, .9);
     -moz-box-shadow: 0px 4px 6px 3px hsla(0, 0%, 0%, .2), inset 0px 1px 0px 0px hsla(0, 0%, 100%, .9);
@@ -4391,8 +4344,6 @@ table.lined-table {
     padding: 5px; 
 }
 .ui-corner-all {
-    -webkit-border-radius:6px;
-    -moz-border-radius:  6px;
     border-radius: 6px;
 }
 .ui-datepicker-header {
@@ -4604,6 +4555,9 @@ table.lined-table {
     .create-promotion .create-promo .save-button button {
         margin-top: 0px;
     }
+
+.create-promo .hidden { display: none; }
+button.new-campaign:disabled { color: gray; }
 
 .bidding-history { padding-top: 10px; }
 .bidding-history .linefield {
@@ -4834,7 +4788,7 @@ dd { margin-left: 20px;  }
     background: white none no-repeat scroll center left;
 }
 
-.usertable .remove-self .main:before,
+.usertable .moderator.toggle .main:before,
 .titlebox .leavemoderator:before,
 .titlebox form.leavecontributor-button:before,
 .icon-menu .reddit-edit:before,
@@ -4852,10 +4806,12 @@ dd { margin-left: 20px;  }
 .icon-menu .reddit-contributors:before,
 .icon-menu .reddit-modqueue:before,
 .giftgold a:before,
+.infobar.gold:before,
 .gold-form h1.goldgift:before,
 .users-online:before,
 .notice-taken:before,
-.notice-available:before {
+.notice-available:before,
+.info-notice:before {
     height: 16px;
     width: 16px;
     display: block;
@@ -4864,8 +4820,12 @@ dd { margin-left: 20px;  }
     margin-right: 5px;
 }
 
-.titlebox .leavemoderator:before, .moderator.remove-self .main:before {
+.titlebox .leavemoderator:before, .moderator.toggle .main:before {
     background-image: url(../shield.png); /* SPRITE */
+}
+
+.moderator.accept-invite .main:before {
+    background-image: url(../addmoderator.png); /* SPRITE */
 }
 
 .titlebox form.leavecontributor-button:before {
@@ -4946,14 +4906,16 @@ dd { margin-left: 20px;  }
     background-image: url(../icon-circle-check.png);  /* SPRITE */
 }
 
+.info-notice:before {
+    background-image: url(../brick-small.png);  /* SPRITE */
+}
+
 .linkinfo {
     padding: 5px;
     border: 1px solid #5f99cf;
     background-color: #EFF7FF;
     font-family:arial,helvetica,sans-serif;
     font-size: larger;
-    -moz-border-radius:3px;
-    -webkit-border-radius:3px;
     border-radius:3px;
 }
 
@@ -5066,43 +5028,6 @@ a.adminbox:hover {
     color: red;
 }
 
-.usage-table .intersection {
-    color: #888;
-    font-family: monospace;
-    text-align: right;
-    border-left: none;
-    border-right: none;
-}
-
-.usage-table .intersection span {
-    padding: 1px 3px 0 2px;
-}
-
-.usage-table .empty.intersection {
-    text-align: center;
-    color: #ccc;
-}
-
-.usage-table .elapsed.intersection {
-    color: black;
-}
-
-.usage-table .count.intersection {
-    color: black;
-}
-
-.usage-table .average.intersection {
-    color: black;
-    border-right: solid #cdcdcd 1px;
-}
-
-.usage-table .empty.intersection, .usage-table .average.intersection {
-    padding-left: 0;
-    margin-left: 0;
-    border-right: solid #cdcdcd 1px;
-    padding-right: 5px;
-}
-
 a.pretty-button:hover { text-decoration: none !important }
 
 .pretty-button {
@@ -5118,8 +5043,6 @@ a.pretty-button:hover { text-decoration: none !important }
     font-weight: normal;
 
     line-height: 20px;
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
     outline-style: none;
 }
@@ -5156,69 +5079,28 @@ a.pretty-button.positive.pressed {
     background-image: url(../bg-button-positive-pressed.png); /* SPRITE stretch-x */
 }
 
-
-/*
-.jury-box .pretty-button a.pressed {
-    margin: -1px 4px -1px 1px;
-    border-width: 2px;
-    border-color: black;
-    color: white;
-}
-*/
-.organic-listing .ontrial, .help-cover.juryduty {
-    background-color: #ffecf8;
-}
-
-.organic-listing .ontrial a.title {
-    color: #555;
-}
-
-.organic-listing .ontrial .midcol {
-    margin-top: 20px;
-}
-
-.we-need-help {
-    font-size: larger;
-    font-weight: bold;
-    line-height: 18px;
-}
-
-.organic-listing .how-to-classify {
-    font-weight: bold;
-}
-
-.jury-box .arrow-msg {
-    display: none;
-    color: red;
-    margin-top:5px;
-}
-
-.jury-box .thanks-for-voting {
-    margin-left: 1em;
-    display: none;
-    color: red;
-}
-
-.jury-box .thanks-for-voting a {
-    margin-left: 1em;
-}
-
-.sitetable .linkontrial {
-/*    border-top: solid 1px #ccc; */
-    padding-top: 5px;
-}
-
-.sitetable .we-need-help {
-    display: none;
-}
-
 .oatmeal img { 
     display: block;
     margin: 5px auto; 
 }
 
-.lounge { display: none }
-.lounge p { margin-top: 5px; }
+.gold-thanks.gold-accent {
+    font-size: small;
+    margin: 35px auto 0;
+    padding: 20px;
+    width: 600px;
+    position: relative;
+    display: block;
+    border-radius: 3px;
+}
+
+.gold-thanks p { margin: 15px 0; text-align: center; }
+.gold-thanks .lounge-msg p { font-size: medium; }
+.gold-thanks .fancy-snoo img {
+    margin: 10px auto;
+    position: relative;
+    display: block;
+}
 
 .gold-accent {
     margin-top: 10px;
@@ -5231,13 +5113,28 @@ a.pretty-button.positive.pressed {
 
 tr.gold-accent { 
     display: table-row; 
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 }
 
 tr.gold-accent + tr > td { 
     padding-top: 10px; 
+}
+
+.gold-accent.titlebox {
+    margin-top: 0;
+    padding-top: .5em;
+}
+
+.allminus-link {
+    margin-top: 1em;
+}
+
+body:not(.gold) .allminus-link {
+    opacity: .75;
+}
+
+.allminus-link a {
+    font-size: 1.15em;
 }
 
 #per-sr-karma {
@@ -5287,8 +5184,13 @@ tr.gold-accent + tr > td {
     display: none;
 }
 
-.giftgold.karma-breakdown {
+.karma-breakdown {
     margin-top: .6em;
+    margin-bottom: 5px;
+}
+
+.karma-breakdown a {
+    font-weight: bold;
 }
 
 .friend-note button[type=submit] { 
@@ -5320,8 +5222,6 @@ tr.gold-accent + tr > td {
 }
 
 .gold-accent .pretty-form input[type=text]#name {
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 }
 
@@ -5329,8 +5229,6 @@ tr.gold-accent + tr > td {
     background-color: #fff088;
     color: #6a4d00;
     border: 1px solid #9a7d2e;
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 }
 
@@ -5352,12 +5250,18 @@ tr.gold-accent + tr > td {
     font-weight: bold;
 }
 .giftgold a:before,
-.gold-form h1.goldgift:before {
+.gold-form h1.goldgift:before,
+.infobar.gold:before
+{
     background-image: url(../giftgold.png); /* SPRITE */
 }
 
-.gold-form h1:before {
-    margin-top: 3px;
+.gold-form p {
+    margin-bottom: 8px;
+}
+
+.gold-form .gold-button {
+    margin-top: 0;
 }
 
 .tiny {
@@ -5383,11 +5287,6 @@ tr.gold-accent + tr > td {
     color: #6a4d00;
 }
 
-.gold-form .roundfield-content .gray a {
-    margin-left: 0.8em;
-    font-size: small;
-}
-
 .gold-form .note {
     font-size: 11px;
     font-style: italic;
@@ -5404,13 +5303,50 @@ tr.gold-accent + tr > td {
     position: absolute;
 }
 
+.gold-form.cloneable {
+    display: none;
+}
+
 .gold-form textarea, .gold-form input[type=text] {
     margin-top: 3px;
 }
 
+.gold-payment form {
+    display: inline;
+}
+
 .gold-logo {
     float: left;
-    margin-right: 15px;
+    margin: 5px 0;
+}
+
+.comment .gold-form {
+    margin: 0 0 10px 4px;
+    min-height: 0;
+}
+
+.gold-payment .roundfield-content {
+    margin-left: 80px;
+}
+
+.gold-payment .close-button {
+    width: 13px;
+    height: 13px;
+    float: right;
+    margin: 6px 4px 6px 8px;
+    border: none;
+    background: url(../close.png) no-repeat;  /* SPRITE */
+    text-indent: -9999px;
+    opacity: .25;
+}
+
+.gold-payment .close-button:hover {
+    opacity: .55;
+}
+
+.gold-payment .close-button:active {
+    position: relative;
+    top: 1px;
 }
 
 .giftmessage {
@@ -5419,9 +5355,6 @@ tr.gold-accent + tr > td {
     background-color: white;
     padding: 0 10px;
     margin-bottom: 15px;
-    display: inline-block;
-    -moz-border-radius: 3px;
-    -webkit-border-radius: 3px;
     border-radius: 3px;
 }
 
@@ -5438,12 +5371,22 @@ tr.gold-accent + tr > td {
     text-shadow: 0px 1px 0px hsla(0,0%,100%,.7);
 }
 
+.gold-button.disabled {
+    color: #999;
+    background-color: #ccc;
+    border-color: #aaa;
+    text-shadow: none;
+}
+
+.gold-dropdown, .goldvertisement {
+    font-family: "Bitstream Charter", "Hoefler Text", "Palatino Linotype",
+                 "Book Antiqua", Palatino, georgia, garamond, FreeSerif, serif;
+}
+
 .gold-dropdown {
     color: #482800;
     background-color: #fff088;
     font-size: 16px;
-    font-family: "Hoefler Text","Palatino Linotype","Book Antiqua",
-                  Palatino,georgia,garamond,FreeSerif,serif;
 }
 
 .comment-visits-box .title {
@@ -5487,29 +5430,31 @@ tr.gold-accent + tr > td {
     height: 48px;
 }
 
-.infobar.client-info .md {
+.infobar.client-info div {
     line-height: 48px;
     margin-left: 56px;
 }
 
-.infobar.client-info .md p {
-    margin: 0;
+.infobar.client-info div p {
+    white-space: nowrap;
 }
 
 .oauth2-authorize {
     position: relative;
     background: url(../snoo-tray.png) no-repeat;
-    width: 415px;
+    width: 542px;
     height: 235px;
     margin: 40px auto 0;
-    padding-left: 280px;
+    padding-left: 268px;
     padding-top: 18px;
 }
 
+.oauth2-authorize h1 {
+    margin-left: 10px;
+}
+
 .oauth2-authorize h1 a {
-    display: block;
     font-weight: bold;
-    font-size: 1.5em;
     letter-spacing: -.04em;
 }
 
@@ -5536,7 +5481,8 @@ tr.gold-accent + tr > td {
 
 .oauth2-authorize .access {
     position: relative;
-    margin: 0 -12px;
+    float: right;
+    width: 510px;
     padding: 10px 15px;
     font-size: 1.5em;
     line-height: 1.5em;
@@ -5562,6 +5508,8 @@ tr.gold-accent + tr > td {
     left: -18px;
     top: 13px;
 }
+
+.oauth2-authorize .access .notice { line-height: normal; }
 
 .oauth2-authorize h2 {
     font-size: 1em;
@@ -5650,12 +5598,21 @@ tr.gold-accent + tr > td {
 .modactions.approvecomment,
 .modactions.addmoderator,
 .modactions.removemoderator,
+.modactions.invitemoderator,
+.modactions.uninvitemoderator,
+.modactions.acceptmoderatorinvite,
 .modactions.addcontributor,
 .modactions.removecontributor,
 .modactions.editsettings,
 .modactions.editflair,
 .modactions.distinguish,
-.modactions.marknsfw {
+.modactions.marknsfw,
+.modactions.wikirevise,
+.modactions.wikipermlevel,
+.modactions.wikibanned,
+.modactions.wikiunbanned,
+.modactions.wikicontributor,
+.modactions.removewikicontributor {
     height: 16px;
     width: 16px;
     display: block;
@@ -5681,10 +5638,13 @@ tr.gold-accent + tr > td {
 .modactions.approvecomment {
     background-image: url(../modactions_approvecomment.png); /* SPRITE */
 }
-.modactions.addmoderator {
+.modactions.addmoderator,
+.modactions.invitemoderator,
+.modactions.acceptmoderatorinvite {
     background-image: url(../modactions_addmoderator.png); /* SPRITE */
 }
-.modactions.removemoderator {
+.modactions.removemoderator,
+.modactions.uninvitemoderator {
     background-image: url(../modactions_removemoderator.png); /* SPRITE */
 }
 .modactions.addcontributor {
@@ -5704,6 +5664,24 @@ tr.gold-accent + tr > td {
 }
 .modactions.marknsfw {
     background-image: url(../modactions_marknsfw.png); /* SPRITE */
+}
+.modactions.wikirevise {
+    background-image: url(../modactions_wikirevise.png); /* SPRITE */
+}
+.modactions.wikipermlevel {
+    background-image: url(../modactions_wikipermlevel.png); /* SPRITE */
+}
+.modactions.wikibanned {
+    background-image: url(../modactions_banuser.png); /* SPRITE */
+}
+.modactions.wikiunbanned {
+    background-image: url(../modactions_unbanuser.png); /* SPRITE */
+}
+.modactions.wikicontributor {
+    background-image: url(../modactions_addcontributor.png); /* SPRITE */
+}
+.modactions.removewikicontributor {
+    background-image: url(../modactions_removecontributor.png); /* SPRITE */
 }
 
 .adminpasswordform {
@@ -5823,6 +5801,41 @@ tr.gold-accent + tr > td {
     text-decoration: underline;
 }
 
+.api-help .toc .mode-selector {
+    display: inline-block;
+    font-size: x-small;
+    border-radius: 5px;
+    border: 1px solid #888;
+    margin-top: 6px;
+    vertical-align: middle;
+}
+
+.api-help .toc .mode-selector .mode {
+    display: inline-block;
+    margin: 2px;
+    padding-top: 2px;
+    padding-bottom: 3px;
+    border-radius: 3px;
+    text-align: center;
+    width: 107px;
+    color: #ddd;
+}
+
+.api-help .toc .mode-selector .mode:hover {
+    background-color: #ccc;
+    color: black;
+    text-decoration: none;
+}
+
+.api-help .toc .mode-selector .mode-current {
+    color: black;
+    background-color: #eee;
+}
+
+.api-help .toc .mode-selector .mode-current:hover {
+    background-color: #ddd;
+}
+
 .api-help em.placeholder {
     font-style: italic;
     font-weight: normal;
@@ -5877,6 +5890,13 @@ tr.gold-accent + tr > td {
     border-bottom: 1px solid #aaa;
 }
 
+.api-help .methods h2 .scope-id {
+    margin-left: 1em;
+    font-size: small;
+    font-weight: normal;
+    font-style: italic;
+}
+
 .api-help .endpoint .info {
     padding-left: 1em;
     border-left: 1px solid #ddd;
@@ -5921,10 +5941,24 @@ tr.gold-accent + tr > td {
     border-collapse: separate;
     border-radius: 3px;
     padding: 5px 10px;
+    border-spacing: 0;
     width: 100%;
 }
 
-.api-help .parameters .name {
+.api-help .parameters th,
+.api-help .parameters td {
+    vertical-align: top;
+    border-bottom: 1px dotted #ccc;
+    padding: 5px 0;
+    margin: 0;
+}
+
+.api-help .parameters tr:last-child th,
+.api-help .parameters tr:last-child td {
+    border: none;
+}
+
+.api-help .parameters th {
     font-family: 'Courier New', monospace;
     width: 50%;
 }
@@ -6146,6 +6180,8 @@ tr.gold-accent + tr > td {
 }
 
 .app-permissions li { position: relative; }
+.app-permissions-details { margin-top: 1em; }
+
 .app-scope {
     display: none;
     position: absolute;
@@ -6208,3 +6244,75 @@ table.diff {font-size: small;}
 .diff_add {background-color:lightgreen}
 .diff_chg {background-color:yellow}
 .diff_sub {background-color:lightcoral}
+
+.gilded-comment-icon {
+    position: relative;
+    display: inline-block;
+    margin: 0 0 -14px 8px;
+    top: -8px;
+    color: #99895F;
+    font-size: .9em;
+    vertical-align: middle;
+}
+
+.gilded-comment-icon:before {
+    display: inline-block;
+    content: '';
+    background-image: url(../gold-coin.png);  /* SPRITE */
+    background-repeat: no-repeat;
+    height: 14px;
+    width: 13px;
+    margin-right: 2px;
+    vertical-align: -3px;
+}
+
+.user-gilded > .entry .gilded-comment-icon:before {
+    width: 23px;
+}
+
+body.post-under-6h-old .gilded-comment-icon {
+    opacity: .55;
+}
+
+.buttons li.comment-save-button { display: none; }
+.buttons li.comment-unsave-button { display: inline; }
+
+body.gold .buttons li.comment-save-button { display: inline; }
+
+.goldvertisement {
+    height: 50px;
+    border: 1px solid #c4b487;
+    text-align: center;
+    line-height: 1.3em;
+    box-shadow: 0 0 10px #dad0b3 inset;
+    color: #333;
+}
+
+.goldvertisement .inner {
+    margin: 1px;
+    border: 1px solid #dbd1b5;
+    height: 46px;
+    line-height: 44px;
+}
+
+.goldvertisement p {
+    display: inline-block;
+    vertical-align: middle;
+    margin: 0 4px;
+    line-height: 14px;
+}
+
+.goldvertisement strong {
+    font-size: 15px;
+}
+
+.goldvertisement a {
+    color: #9a7d2e;
+    font-weight: bold;
+    text-decoration: underline;
+}
+
+.goldvertisement i {
+    font-size: 11px;
+    font-variant: italic;
+}

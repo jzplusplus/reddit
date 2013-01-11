@@ -74,13 +74,10 @@ class Builder(object):
 
         authors = {}
         cup_infos = {}
-        email_attrses = {}
         friend_rels = None
         if aids:
             authors = Account._byID(aids, data=True, stale=self.stale) if aids else {}
             cup_infos = Account.cup_info_multi(aids)
-            if c.user_is_admin:
-                email_attrses = admintools.email_attrs(aids, return_dict=True)
             if user and user.gold:
                 friend_rels = user.friend_rels()
 
@@ -168,10 +165,6 @@ class Builder(object):
                     args['kind'] = 'special'
                 add_attr(w.attribs, **args)
 
-            if False and w.author and c.user_is_admin:
-                for attr in email_attrses[w.author._id]:
-                    add_attr(w.attribs, attr[2], label=attr[1])
-
             if w.author and w.author._id in cup_infos and not c.profilepage:
                 cup_info = cup_infos[w.author._id]
                 label = _(cup_info["label_template"]) % \
@@ -228,7 +221,6 @@ class Builder(object):
             w.show_reports = False
             w.show_spam    = False
             w.can_ban      = False
-            w.reveal_trial_info = False
             w.use_big_modbuttons = False
 
             if (c.user_is_admin
@@ -252,10 +244,14 @@ class Builder(object):
                     if getattr(w, "author", None) and w.author._spam:
                         w.show_spam = "author"
 
+                    if c.user == w.author and c.user._spam:
+                        w.show_spam = False
+                        w._spam = False
+                        w.use_big_modbuttons = False
+
                 elif getattr(item, 'reported', 0) > 0:
                     w.show_reports = True
                     w.use_big_modbuttons = True
-
 
         # recache the user object: it may be None if user is not logged in,
         # whereas now we are happy to have the UnloggedUser object
@@ -535,11 +531,14 @@ class SearchBuilder(IDBuilder):
             return True
 
 class WikiRevisionBuilder(QueryBuilder):
+    show_extended = True
+    
     def wrap_items(self, items):
         types = {}
         wrapped = []
         for item in items:
             w = self.wrap(item)
+            w.show_extended = self.show_extended
             types.setdefault(w.render_class, []).append(w)
             wrapped.append(w)
         
@@ -553,6 +552,8 @@ class WikiRevisionBuilder(QueryBuilder):
         return not item.is_hidden
 
 class WikiRecentRevisionBuilder(WikiRevisionBuilder):
+    show_extended = False
+    
     def must_skip(self, item):
         return (datetime.datetime.now(g.tz) - item.date).days >= WIKI_RECENT_DAYS
         

@@ -97,6 +97,10 @@
   %if thing.site:
         <input type="hidden" name="prev_public_description_id" value="${thing.site.prev_public_description_id}"/>
         <input type="hidden" name="prev_description_id" value="${thing.site.prev_description_id}"/>
+        ${error_field("TOO_LONG", "prev_public_description_id")}
+        ${error_field("TOO_LONG", "prev_description_id")}
+        ${error_field("BAD_REVISION", "prev_public_description_id")}
+        ${error_field("BAD_REVISION", "prev_description_id")}
   %endif
 
   <%utils:line_field title="${_('language')}">
@@ -144,7 +148,7 @@
                            _("Wiki is disabled for all users except mods"),
                            (not thing.site or thing.site.wikimode == 'disabled'))}
         ${utils.radio_type('wikimode', "modonly", _("mod editing"),
-                           _("Only mods or those on a pages edit list may edit"),
+                           _("Only mods, approved wiki contributors, or those on a page's edit list may edit"),
                            (thing.site and thing.site.wikimode == 'modonly'))}
         ${utils.radio_type('wikimode', "anyone", _("anyone"),
                            _("Anyone who can submit to the subreddit may edit"),
@@ -161,6 +165,7 @@
         %else:
             <input id="wiki_edit_karma" type="text" name="wiki_edit_karma" value="100" />
         %endif
+        ${error_field("BAD_NUMBER", "wiki_edit_karma")}
     </div>
     <div class="delete-field">
     <label for="wiki_edit_age">${_('Account age (days) required to edit and create wiki pages:')}</label>
@@ -170,6 +175,7 @@
         %else:
             <input id="wiki_edit_age" type="text" name="wiki_edit_age" value="0" />
         %endif
+        ${error_field("BAD_NUMBER", "wiki_edit_age")}
     </div>
     </div>
   </%utils:line_field>

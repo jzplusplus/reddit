@@ -27,7 +27,6 @@ from r2.lib.utils import vote_hash, UrlParser, timesince, is_subdomain
 from r2.lib.media import s3_direct_url
 
 import babel.numbers
-from mako.filters import url_escape
 import simplejson
 import os.path
 from copy import copy
@@ -43,6 +42,11 @@ def is_encoding_acceptable(encoding_to_check):
     header = request.headers.get('Accept-Encoding', '')
     return 'gzip' in desired_matches(['gzip'], header)
 
+static_text_extensions = {
+    '.js': 'js',
+    '.css': 'css',
+    '.less': 'css'
+}
 def static(path, allow_gzip=True):
     """
     Simple static file maintainer which automatically paths and
@@ -54,7 +58,7 @@ def static(path, allow_gzip=True):
     """
     dirname, filename = os.path.split(path)
     extension = os.path.splitext(filename)[1]
-    is_text = extension in ('.js', '.css')
+    is_text = extension in static_text_extensions
     can_gzip = is_text and is_encoding_acceptable('gzip')
     should_gzip = allow_gzip and can_gzip
 
@@ -80,7 +84,7 @@ def static(path, allow_gzip=True):
 
             # unminified static files are in type-specific subdirectories
             if not dirname and is_text:
-                path_components.append(extension[1:])
+                path_components.append(static_text_extensions[extension])
 
             actual_filename = filename
 
@@ -112,7 +116,7 @@ def s3_https_if_secure(url):
          replace = "https://%s/" % s3_direct_url
     return url.replace("http://", replace)
 
-def js_config():
+def js_config(extra_config=None):
     config = {
         # is the user logged in?
         "logged": c.user_is_loggedin and c.user.name,
@@ -146,13 +150,12 @@ def js_config():
         "uitracker_url": g.uitracker_url,
         "static_root": static(''),
     }
+
+    if extra_config:
+        config.update(extra_config)
+
     return config
 
-def generateurl(context, path, **kw):
-    if kw:
-        return path + '?' + '&'.join(["%s=%s"%(k, url_escape(v)) \
-                                      for k, v in kw.iteritems() if v])
-    return path
 
 def class_dict():
     t_cls = [Link, Comment, Message, Subreddit]
@@ -364,13 +367,13 @@ def add_sr(path, sr_path = True, nocname=False, force_hostname = False, retain_e
     parses the path and updates it to include the subreddit path
     according to the rules set by its arguments:
 
-     * force_hostname: if True, force the url's hotname to be updated
+     * force_hostname: if True, force the url's hostname to be updated
        even if it is already set in the path, and subject to the
        c.cname/nocname combination.  If false, the path will still
        have its domain updated if no hostname is specified in the url.
-    
+
      * nocname: when updating the hostname, overrides the value of
-       c.cname to set the hotname to g.domain.  The default behavior
+       c.cname to set the hostname to g.domain.  The default behavior
        is to set the hostname consistent with c.cname.
 
      * sr_path: if a cname is not used for the domain, updates the
@@ -393,7 +396,7 @@ def add_sr(path, sr_path = True, nocname=False, force_hostname = False, retain_e
         else:
             u.hostname = get_domain(cname = (c.cname and not nocname),
                                     subreddit = False)
-    
+
     if c.secure:
         u.scheme = "https"
 
@@ -410,7 +413,7 @@ def join_urls(*urls):
     """joins a series of urls together without doubles slashes"""
     if not urls:
         return
-    
+
     url = urls[0]
     for u in urls[1:]:
         if not url.endswith('/'):
@@ -481,7 +484,7 @@ def add_attr(attrs, kind, label=None, link=None, cssclass=None, symbol=None):
         if not label:
             label = _('reddit admin, speaking officially')
         if not link:
-            link = '/help/faq#Whorunsreddit'
+            link = '/about/team'
     elif kind in ('X', '@'):
         priority = 5
         cssclass = 'gray'
@@ -513,7 +516,7 @@ def add_attr(attrs, kind, label=None, link=None, cssclass=None, symbol=None):
     attrs.append( (priority, symbol, cssclass, label, link, img) )
 
 
-def search_url(query, subreddit, restrict_sr="off", sort=None):
+def search_url(query, subreddit, restrict_sr="off", sort=None, recent=None):
     import urllib
     query = _force_utf8(query)
     url_query = {"q": query}
@@ -521,6 +524,8 @@ def search_url(query, subreddit, restrict_sr="off", sort=None):
         url_query["restrict_sr"] = restrict_sr
     if sort:
         url_query["sort"] = sort
+    if recent:
+        url_query["t"] = recent
     path = "/r/%s/search?" % subreddit if subreddit else "/search?"
     path += urllib.urlencode(url_query)
     return path

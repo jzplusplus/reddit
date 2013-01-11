@@ -23,21 +23,22 @@
 import os
 import base64
 import traceback
+import ConfigParser
 
 from urllib import unquote_plus
 from urllib2 import urlopen
 from urlparse import urlparse, urlunparse
-from threading import local
 import signal
 from copy import deepcopy
 import cPickle as pickle
 import re, math, random
+import boto
+from decimal import Decimal
 
 from BeautifulSoup import BeautifulSoup, SoupStrainer
 
 from time import sleep
 from datetime import datetime, timedelta
-from functools import wraps, partial, WRAPPER_ASSIGNMENTS
 from pylons import g
 from pylons.i18n import ungettext, _
 from r2.lib.filters import _force_unicode, _force_utf8
@@ -367,8 +368,8 @@ def query_string(dict):
     for k,v in dict.iteritems():
         if v is not None:
             try:
-                k = url_escape(unicode(k).encode('utf-8'))
-                v = url_escape(unicode(v).encode('utf-8'))
+                k = url_escape(_force_unicode(k))
+                v = url_escape(_force_unicode(v))
                 pairs.append(k + '=' + v)
             except UnicodeDecodeError:
                 continue
@@ -655,37 +656,6 @@ def to_js(content, callback="document.write", escape=True):
     if escape:
         content = string2js(content)
     return before + content + after
-
-class TransSet(local):
-    def __init__(self, items = ()):
-        self.set = set(items)
-        self.trans = False
-
-    def begin(self):
-        self.trans = True
-
-    def add_engine(self, engine):
-        if self.trans:
-            return self.set.add(engine.begin())
-
-    def clear(self):
-        return self.set.clear()
-
-    def __iter__(self):
-        return self.set.__iter__()
-
-    def commit(self):
-        for t in self:
-            t.commit()
-        self.clear()
-
-    def rollback(self):
-        for t in self:
-            t.rollback()
-        self.clear()
-
-    def __del__(self):
-        self.commit()
 
 def pload(fname, default = None):
     "Load a pickled object from a file"
@@ -1105,6 +1075,11 @@ def make_offset_date(start_date, interval, future = True,
         return start_date - timedelta(interval)
     return start_date
 
+def to_date(d):
+    if isinstance(d, datetime):
+        return d.date()
+    return d
+
 def in_chunks(it, size=25):
     chunk = []
     it = iter(it)
@@ -1378,12 +1353,6 @@ def constant_time_compare(actual, expected):
             result |= ord(actual[i]) ^ ord(expected[i % expected_len])
     return result == 0
 
-def wraps_api(f):
-    # work around issue where wraps() requires attributes to exist
-    if not hasattr(f, '_api_doc'):
-        f._api_doc = {}
-    return wraps(f, assigned=WRAPPER_ASSIGNMENTS+('_api_doc',))
-
 
 def extract_urls_from_markdown(md):
     "Extract URLs that will be hot links from a piece of raw Markdown."
@@ -1432,13 +1401,114 @@ def parse_http_basic(authorization_header):
     return require_split(auth_data, 2, ":")
 
 
-def simple_traceback():
-    """Generate a pared-down traceback that's human readable but small."""
+def simple_traceback(limit):
+    """Generate a pared-down traceback that's human readable but small.
 
-    stack_trace = traceback.extract_stack(limit=7)[:-2]
+    `limit` is how many frames of the stack to put in the traceback.
+
+    """
+
+    stack_trace = traceback.extract_stack(limit=limit)[:-2]
     return "\n".join(":".join((os.path.basename(filename),
                                function_name,
                                str(line_number),
                               ))
                      for filename, line_number, function_name, text
                      in stack_trace)
+
+
+def weighted_lottery(weights, _random=random.random):
+    """Randomly choose a key from a dict where values are weights.
+
+    Weights should be non-negative numbers, and at least one weight must be
+    non-zero. The probability that a key will be selected is proportional to
+    its weight relative to the sum of all weights. Keys with zero weight will
+    be ignored.
+
+    Raises ValueError if weights is empty or contains a negative weight.
+    """
+
+    total = sum(weights.itervalues())
+    if total <= 0:
+        raise ValueError("total weight must be positive")
+
+    r = _random() * total
+    t = 0
+    for key, weight in weights.iteritems():
+        if weight < 0:
+            raise ValueError("weight for %r must be non-negative" % key)
+        t += weight
+        if t > r:
+            return key
+
+    # this point should never be reached
+    raise ValueError(
+        "weighted_lottery messed up: r=%r, t=%r, total=%r" % (r, t, total))
+
+
+def read_static_file_config(config_file):
+    parser = ConfigParser.RawConfigParser()
+    with open(config_file, "r") as cf:
+        parser.readfp(cf)
+    config = dict(parser.items("static_files"))
+
+    s3 = boto.connect_s3(config["aws_access_key_id"],
+                         config["aws_secret_access_key"])
+    bucket = s3.get_bucket(config["bucket"])
+
+    return bucket, config
+
+
+class GoldPrice(object):
+    """Simple price math / formatting type.
+
+    Prices are assumed to be USD at the moment.
+
+    """
+    def __init__(self, decimal):
+        self.decimal = Decimal(decimal)
+
+    def __mul__(self, other):
+        return type(self)(self.decimal * other)
+
+    def __div__(self, other):
+        return type(self)(self.decimal / other)
+
+    def __str__(self):
+        return "$%s" % self.decimal.quantize(Decimal("1.00"))
+
+    def __repr__(self):
+        return "%s(%s)" % (type(self).__name__, self)
+
+    @property
+    def pennies(self):
+        return int(self.decimal * 100)
+
+
+def config_gold_price(v, key=None, data=None):
+    return GoldPrice(v)
+
+
+def canonicalize_email(email):
+    """Return the given email address without various localpart manglings.
+
+    a.s.d.f+something@gmail.com --> asdf@gmail.com
+
+    This is not at all RFC-compliant or correct. It's only intended to be a
+    quick heuristic to remove commonly used mangling techniques.
+
+    """
+
+    if not email:
+        return ""
+
+    email = _force_utf8(email.lower())
+
+    localpart, at, domain = email.partition("@")
+    if not at or "@" in domain:
+        return ""
+
+    localpart = localpart.replace(".", "")
+    localpart = localpart.partition("+")[0]
+
+    return localpart + "@" + domain

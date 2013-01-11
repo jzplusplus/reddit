@@ -35,10 +35,9 @@ class PrintableButtons(Styled):
     def __init__(self, style, thing,
                  show_delete = False, show_report = True,
                  show_distinguish = False, show_marknsfw = False,
-                 show_unmarknsfw = False, show_indict = False, is_link=False,
+                 show_unmarknsfw = False, is_link=False,
                  show_flair = False, **kw):
-        show_ignore = (thing.show_reports or
-                       (thing.reveal_trial_info and not thing.show_spam))
+        show_ignore = thing.show_reports
         approval_checkmark = getattr(thing, "approval_checkmark", None)
         show_approve = (thing.show_spam or show_ignore or
                         (is_link and approval_checkmark is None)) and not thing._deleted
@@ -54,7 +53,6 @@ class PrintableButtons(Styled):
                         show_delete = show_delete,
                         show_approve = show_approve,
                         show_report = show_report,
-                        show_indict = show_indict,
                         show_distinguish = show_distinguish,
                         show_marknsfw = show_marknsfw,
                         show_unmarknsfw = show_unmarknsfw,
@@ -78,9 +76,6 @@ class LinkButtons(PrintableButtons):
 
         if c.user_is_admin and thing.promoted is None:
             show_report = False
-            show_indict = True
-        else:
-            show_indict = False
 
         if (thing.can_ban or is_author) and not thing.nsfw:
             show_marknsfw = True
@@ -129,7 +124,6 @@ class LinkButtons(PrintableButtons):
                                   hidden = thing.hidden, 
                                   show_delete = show_delete,
                                   show_report = show_report and c.user_is_loggedin,
-                                  show_indict = show_indict,
                                   show_distinguish = show_distinguish,
                                   show_marknsfw = show_marknsfw,
                                   show_unmarknsfw = show_unmarknsfw,
@@ -149,17 +143,36 @@ class CommentButtons(PrintableButtons):
         # do we show the delete button?
         show_delete = is_author and delete and not thing._deleted
 
+        can_gild = (
+            # you can't gild your own comment
+            not is_author
+            # no point in showing the button for things you've already gilded
+            and not thing.user_gilded
+            # this is a way of checking if the user is logged in that works
+            # both within CommentPane instances and without.  e.g. CommentPane
+            # explicitly sets user_is_loggedin = False but can_reply is
+            # correct.  while on user overviews, you can't reply but will get
+            # the correct value for user_is_loggedin
+            and (c.user_is_loggedin or thing.can_reply)
+            # ick, if the author deleted their account we shouldn't waste gold
+            and not thing.author._deleted
+            # some subreddits can have gilding disabled
+            and thing.subreddit.allow_comment_gilding
+        )
+
         show_distinguish = is_author and (thing.can_ban or c.user_special_distinguish)
 
         PrintableButtons.__init__(self, "commentbuttons", thing,
                                   is_author = is_author, 
                                   profilepage = c.profilepage,
                                   permalink = thing.permalink,
+                                  saved = thing.saved,
                                   new_window = c.user.pref_newwindow,
                                   full_comment_path = thing.full_comment_path,
                                   deleted = thing.deleted,
                                   parent_permalink = thing.parent_permalink, 
                                   can_reply = thing.can_reply,
+                                  can_gild=can_gild,
                                   show_report = show_report,
                                   show_distinguish = show_distinguish,
                                   show_delete = show_delete)
@@ -202,7 +215,7 @@ def wrap_links(links, wrapper = default_thing_wrapper(),
                num = None, show_nums = False, nextprev = False,
                num_margin = None, mid_margin = None, **kw):
     links = tup(links)
-    if not all(isinstance(x, str) for x in links):
+    if not all(isinstance(x, basestring) for x in links):
         links = [x._fullname for x in links]
     b = IDBuilder(links, num = num, wrap = wrapper, **kw)
     l = listing_cls(b, nextprev = nextprev, show_nums = show_nums)

@@ -20,22 +20,31 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
-from sqlalchemy import Column, String, DateTime, Date, Float, Integer, Boolean,\
-     BigInteger, func as safunc, and_, or_
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.schema import PrimaryKeyConstraint
-from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.orm.exc import NoResultFound
+import datetime
+
+from pylons import g, request
+from sqlalchemy import (
+    and_,
+    Boolean,
+    BigInteger,
+    Column,
+    DateTime,
+    Date,
+    Float,
+    func as safunc,
+    Integer,
+    String,
+)
 from sqlalchemy.dialects.postgresql.base import PGInet as Inet
 from sqlalchemy.ext.declarative import declarative_base
-from pylons import g
-from r2.lib.utils import Enum
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm.exc import NoResultFound
+
+from r2.lib.db.thing import Thing, NotFound
+from r2.lib.memoize import memoize
+from r2.lib.utils import Enum, to_date
 from r2.models.account import Account
 from r2.models import Link
-from r2.lib.db.thing import Thing, NotFound
-from pylons import request
-from r2.lib.memoize import memoize
-import datetime
 
 
 engine = g.dbm.get_engine('authorize')
@@ -327,146 +336,16 @@ class Bid(Sessionized, Base):
         self.set_status(self.STATUS.CHARGE)
 
     def is_charged(self):
-        '''
+        """
         Returns True if transaction has been charged with authorize.net or is
         a freebie with "charged" status.
-        '''
+        """
         return (self.status == self.STATUS.CHARGE)
 
     def refund(self):
         self.set_status(self.STATUS.REFUND)
 
-#TODO: decommission and drop tables once the patch is working
-class PromoteDates(Sessionized, Base):
-    __tablename__ = "promote_date"
 
-    thing_name   = Column(String, primary_key = True, autoincrement = False)
-
-    account_id   = Column(BigInteger, index = True,  autoincrement = False)
-
-    start_date = Column(Date(), nullable = False, index = True)
-    end_date   = Column(Date(), nullable = False, index = True)
-
-    actual_start = Column(DateTime(timezone = True), index = True)
-    actual_end   = Column(DateTime(timezone = True), index = True)
-
-    bid          = Column(Float)
-    refund       = Column(Float)
-
-    @classmethod
-    def update(cls, thing, start_date, end_date):
-        try:
-            promo = cls.one(thing)
-            promo.start_date = start_date.date()
-            promo.end_date   = end_date.date()
-            promo._commit()
-        except NotFound:
-            promo = cls._new(thing, thing.author_id, start_date, end_date)
-
-    @classmethod
-    def update_bid(cls, thing):
-        bid = thing.promote_bid
-        refund = 0
-        if thing.promote_trans_id < 0:
-            refund = bid
-        elif hasattr(thing, "promo_refund"):
-            refund = thing.promo_refund
-        promo = cls.one(thing)
-        promo.bid = bid
-        promo.refund = refund
-        promo._commit()
-
-    @classmethod
-    def log_start(cls, thing):
-        promo = cls.one(thing)
-        promo.actual_start = datetime.datetime.now(g.tz)
-        promo._commit()
-        cls.update_bid(thing)
-
-    @classmethod
-    def log_end(cls, thing):
-        promo = cls.one(thing)
-        promo.actual_end = datetime.datetime.now(g.tz)
-        promo._commit()
-        cls.update_bid(thing)
-
-    @classmethod
-    def for_date(cls, date):
-        if isinstance(date, datetime.datetime):
-            date = date.date()
-        q = cls.query().filter(and_(cls.start_date <= date,
-                                    cls.end_date > date))
-        return q.all()
-
-    @classmethod
-    def for_date_range(cls, start_date, end_date, account_id = None):
-        if isinstance(start_date, datetime.datetime):
-            start_date = start_date.date()
-        if isinstance(end_date, datetime.datetime):
-            end_date = end_date.date()
-        # Three cases to be included:
-        # 1) start date is in the provided interval
-        start_inside = and_(cls.start_date >= start_date,
-                            cls.start_date <  end_date)
-        # 2) end date is in the provided interval
-        end_inside   = and_(cls.end_date   >= start_date,
-                            cls.end_date   <  end_date)
-        # 3) interval is a subset of a promoted interval
-        surrounds    = and_(cls.start_date <= start_date,
-                            cls.end_date   >= end_date)
-
-        q = cls.query().filter(or_(start_inside, end_inside, surrounds))
-        if account_id is not None:
-            q = q.filter(cls.account_id == account_id)
-
-        return q.all()
-
-    @classmethod
-    @memoize('promodates.bid_history', time = 10 * 60)
-    def bid_history(cls, start_date, end_date = None, account_id = None):
-        end_date = end_date or datetime.datetime.now(g.tz)
-        q = cls.for_date_range(start_date, end_date, account_id = account_id)
-
-        d = start_date.date()
-        end_date = end_date.date()
-        res = []
-        while d < end_date:
-            bid = 0
-            refund = 0
-            for i in q:
-                end = i.actual_end.date() if i.actual_end else i.end_date
-                start = i.actual_start.date() if i.actual_start else None
-                if start and start <= d and end > d:
-                    duration = float((end - start).days)
-                    bid += i.bid / duration
-                    refund += i.refund / duration
-            res.append([d, bid, refund])
-            d += datetime.timedelta(1)
-        return res
-
-    @classmethod
-    @memoize('promodates.top_promoters', time = 10 * 60)
-    def top_promoters(cls, start_date, end_date = None):
-        end_date = end_date or datetime.datetime.now(g.tz)
-        q = cls.for_date_range(start_date, end_date)
-
-        d = start_date
-        res = []
-        accounts = Account._byID([i.account_id for i in q],
-                                 return_dict = True, data = True)
-        res = {}
-        for i in q:
-            if i.bid is not None and i.actual_start is not None:
-                r = res.setdefault(i.account_id, [0, 0, set()])
-                r[0] += i.bid
-                r[1] += i.refund
-                r[2].add(i.thing_name)
-        res = [ ([accounts[k]] + v) for (k, v) in res.iteritems() ]
-        res.sort(key = lambda x: x[1] - x[2], reverse = True)
-
-        return res
-
-# eventual replacement for PromoteDates
 class PromotionWeights(Sessionized, Base):
     __tablename__ = "promotion_weight"
 
@@ -524,22 +403,24 @@ class PromotionWeights(Sessionized, Base):
             item._delete()
 
     @classmethod
-    def get_campaigns(cls, d):
-        d = to_date(d)
-        return list(cls.query(date = d))
+    def get_campaigns(cls, start, end=None, author_id=None):
+        start = to_date(start)
+        q = cls.query()
+        if end:
+            end = to_date(end)
+            q = q.filter(and_(cls.date >= start, cls.date < end))
+        else:
+            q = q.filter(cls.date == start)
+        
+        if author_id:
+            q = q.filter(cls.account_id == author_id)
+        
+        return list(q)
 
     @classmethod
     def get_schedule(cls, start_date, end_date, author_id = None):
-        start_date = to_date(start_date)
-        end_date   = to_date(end_date)
-        q = cls.query()
-        q = q.filter(and_(cls.date >= start_date, cls.date < end_date))
-
-        if author_id is not None:
-            q = q.filter(cls.account_id == author_id)
-
         res = {}
-        for x in q.all():
+        for x in cls.get_campaigns(start_date, end_date, author_id):
             res.setdefault((x.thing_name, x.promo_idx), []).append(x.date)
 
         return [(k[0], k[1], min(v), max(v)) for k, v in res.iteritems()]
@@ -585,11 +466,7 @@ class PromotionWeights(Sessionized, Base):
             d += datetime.timedelta(1)
         return res
 
-def to_date(d):
-    if isinstance(d, datetime.datetime):
-        return d.date()
-    return d
-
 # do all the leg work of creating/connecting to tables
-Base.metadata.create_all()
+if g.db_create_tables:
+    Base.metadata.create_all()
 

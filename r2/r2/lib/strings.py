@@ -65,8 +65,6 @@ string_dict = dict(
     # this is for Japanese which treats people counts differently
     person_label = _("<span class='number'>%(num)s</span>&#32;<span class='word'>%(persons)s</span>"),
 
-    firsttext = _("reddit is a source for what's new and popular online. vote on links that you like or dislike and help decide what's popular, or submit your own! [learn more &rsaquo;](/about)"),
-
     already_submitted = _("that link has already been submitted, but you can try to [submit it again](%s)."),
 
     multiple_submitted = _("that link has been submitted to multiple reddits. you can try to [submit it again](%s)."),
@@ -76,7 +74,8 @@ string_dict = dict(
     cover_msg      = _("you'll need to login or register to do that"),
     cover_disclaim = _("(don't worry, it only takes a few seconds)"),
 
-    oauth_login_msg = _("Log in or register to connect your reddit account with [%(app_name)s](%(app_about_url)s)."),
+    oauth_login_msg = _(
+        "Log in or register to connect your reddit account with %(app)s."),
 
     login_fallback_msg = _("try using our secure login form."),
 
@@ -86,25 +85,7 @@ string_dict = dict(
 
     sr_created = _('your reddit has been created'),
 
-    active_trials = _("we haven't yet decided whether these things are spam, so you have a chance to change your vote:"),
-    finished_trials = _("it's too late to change your vote on these things (the verdict has been issued):"),
     more_info_link = _("visit [%(link)s](%(link)s) for more information"),
-
-    msg_add_friend = dict(
-        friend = None,
-        moderator = _("you have been added as a moderator to [%(title)s](%(url)s)."),
-        contributor = _("you have been added as an approved submitter to [%(title)s](%(url)s)."),
-        banned = _("you have been banned from posting to [%(title)s](%(url)s)."),
-        traffic = _('you have been added to the list of users able to see [traffic for the sponsored link "%(title)s"](%(traffic_url)s).')
-        ),
-
-    subj_add_friend = dict(
-        friend = None,
-        moderator = _("you are a moderator"),
-        contributor = _("you are an approved submitter"),
-        banned = _("you've been banned"),
-        traffic = _("you can view traffic on a promoted link")
-        ),
 
     sr_messages = dict(
         empty =  _('you have not subscribed to any reddits.'),
@@ -156,17 +137,19 @@ string_dict = dict(
     unverified_quota_msg = _("Looks like you're either a brand new user or your posts have not been doing well recently. You may have to wait a bit to post again. In the meantime feel free to [check out the reddiquette](%(reddiquette)s), join the conversation in a different thread, or [verify your email address](%(verify)s)."),
     read_only_msg = _("reddit is in \"emergency read-only mode\" right now. :( you won't be able to log in. we're sorry, and are working frantically to fix the problem."),
     heavy_load_msg = _("this page is temporarily in read-only mode due to heavy traffic."),
-    lounge_msg = _("Please grab a drink and join us in [the lounge](%(link)s)."),
+    lounge_msg = _("please grab a drink and join us in [the lounge](%(link)s)."),
     postcard_msg = _("You sent us a postcard! (Or something similar.) When we run out of room on our refrigerator, we might one day auction off the stuff that people sent in. Is it okay if we include your thing?"),
     over_comment_limit = _("Sorry, the maximum number of comments is %(max)d. (However, if you subscribe to reddit gold, it goes up to %(goldmax)d.)"),
     over_comment_limit_gold = _("Sorry, the maximum number of comments is %d."),
     youve_got_gold = _("%(sender)s just sent you %(amount)s of reddit gold! Wasn't that nice?"),
     giftgold_note = _("Here's a note that was included:\n\n----\n\n"),
+    youve_got_comment_gold = _("A redditor liked [your comment](%(url)s) so much, they gave you a month of reddit gold. Shiny!"),
     gold_summary_autorenew = _("You're about to set up an ongoing, autorenewing subscription to reddit gold for yourself (%(user)s)."),
     gold_summary_onetime = _("You're about to make a one-time purchase of %(amount)s of reddit gold for yourself (%(user)s)."),
     gold_summary_creddits = _("You're about to purchase %(amount)s of reddit gold creddits. They work like gift certificates: each creddit you have will allow you to give one month of reddit gold to someone else."),
     gold_summary_signed_gift = _("You're about to give %(amount)s of reddit gold to %(recipient)s, who will be told that it came from you."),
     gold_summary_anonymous_gift = _("You're about to give %(amount)s of reddit gold to %(recipient)s. It will be an anonymous gift."),
+    gold_summary_comment_gift = _("Want to say thanks to *%(recipient)s* for this comment? Give them a month of [reddit gold](/help/gold)."),
     unvotable_message = _("sorry, this has been archived and can no longer be voted on"),
     account_activity_blurb = _("This page shows a history of recent activity on your account. If you notice unusual activity, you should change your password immediately. Location information is guessed from your computer's IP address and may be wildly wrong, especially for visits from mobile devices. Note: due to a bug, private-use addresses (starting with 10.) sometimes show up erroneously in this list after regular use of the site."),
     your_current_ip_is = _("You are currently accessing reddit from this IP address: %(address)s."),
@@ -195,6 +178,13 @@ Note: there are a couple of places outside of your subreddit where someone can c
 
     an_error_occurred = _("an error occurred"),
     an_error_occurred_friendly = _("an error occurred. please try again later!"),
+    rate_limit = _("please wait a few seconds and try again."),
+    subscribed_multi = _("multireddit of your subscriptions"),
+    mod_multi = _("multireddit of subreddits you moderate"),
+
+    r_all_description = _("/r/all displays content from all of reddit, including subreddits you aren't subscribed to."),
+    r_all_minus_description = _("Displaying content from /r/all of reddit, except the following subreddits:"),
+    all_minus_gold_only = _('Filtering /r/all is a feature only available to [reddit gold](/gold/about) subscribers. Displaying unfiltered results from /r/all.'),
 )
 
 class StringHandler(object):

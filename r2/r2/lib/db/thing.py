@@ -232,32 +232,44 @@ class DataThing(object):
         return self._dirty
 
     def _commit(self, keys=None):
-        if not self._created:
-            self._create()
-            just_created = True
-        else:
-            just_created = False
+        lock = None
 
-        with g.make_lock("thing_commit", 'commit_' + self._fullname):
-            if not self._sync_latest():
+        try:
+            if not self._created:
+                begin()
+                self._create()
+                just_created = True
+            else:
+                just_created = False
+
+            lock = g.make_lock("thing_commit", 'commit_' + self._fullname)
+            lock.acquire()
+
+            if not just_created and not self._sync_latest():
                 #sync'd and we have nothing to do now, but we still cache anyway
                 self._cache_myself()
                 return
 
+            # begin is a no-op if already done, but in the not-just-created
+            # case we need to do this here because the else block is not
+            # executed when the try block is exited prematurely in any way
+            # (including the return in the above branch)
+            begin()
+
+            to_set = self._dirties.copy()
             if keys:
                 keys = tup(keys)
-                to_set = dict((k, self._dirties[k][1])
-                              for k in keys if self._dirties.has_key(k))
-            else:
-                to_set = dict((k, v[1]) for k, v in self._dirties.iteritems())
+                for key in to_set.keys():
+                    if key not in keys:
+                        del to_set[key]
 
             data_props = {}
             thing_props = {}
-            for k, v in to_set.iteritems():
+            for k, (old_value, new_value) in to_set.iteritems():
                 if k.startswith('_'):
-                    thing_props[k[1:]] = v
+                    thing_props[k[1:]] = new_value
                 else:
-                    data_props[k] = v
+                    data_props[k] = new_value
 
             if data_props:
                 self._set_data(self._type_id,
@@ -276,6 +288,16 @@ class DataThing(object):
                 self._dirties.clear()
 
             self._cache_myself()
+        except:
+            rollback()
+            raise
+        else:
+            commit()
+        finally:
+            if lock:
+                lock.release()
+
+        g.plugins.on_thing_commit(self, to_set)
 
     @classmethod
     def _load_multi(cls, need):
@@ -880,7 +902,6 @@ class Query(object):
         self._read_cache = kw.get('read_cache')
         self._write_cache = kw.get('write_cache')
         self._cache_time = kw.get('cache_time', 0)
-        self._stats_collector = kw.get('stats_collector')
         self._limit = kw.get('limit')
         self._data = kw.get('data')
         self._sort = kw.get('sort', ())
@@ -984,9 +1005,6 @@ class Query(object):
 
     def __iter__(self):
         used_cache = False
-
-        if self._stats_collector:
-            self._stats_collector.add(self)
 
         def _retrieve():
             return self._cursor().fetchall()

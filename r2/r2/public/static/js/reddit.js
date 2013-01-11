@@ -98,10 +98,14 @@ function get_form_fields(form, fields, filter_func) {
 };
 
 function form_error(form) {
-    return function(r) {
-        $(form).find(".status")
-            .html("an error occurred while posting " + 
-                  "(status: " + r.status + ")").end();
+    return function(req) {
+        var msg
+        if (req == 'ratelimit') {
+            msg = r.strings.rate_limit
+        } else {
+            msg = 'an error occurred while posting (status: ' + req.status + ')'
+        }
+        $(form).find('.status').text(msg)
     }
 }
 
@@ -158,7 +162,7 @@ function deleteRow(elem) {
 /* general things */
 
 function change_state(elem, op, callback, keep, post_callback) {
-    var form = $(elem).parents("form");
+    var form = $(elem).parents("form").first();
     /* look to see if the form has an id specified */
     var id = form.find('input[name="id"]');
     if (id.length) 
@@ -806,6 +810,7 @@ function sr_name_down(e) {
         return false;
     }
     else if (e.keyCode == 13) {
+        $("#sr-autocomplete").trigger("sr-changed");
         hide_sr_name_list();
         input.parents("form").submit();
         return false;
@@ -826,12 +831,14 @@ function sr_dropdown_mup(row) {
         var name = $(row).text();
         $("#sr-autocomplete").val(name);
         $("#sr-drop-down").hide();
+        $("#sr-autocomplete").trigger("sr-changed");
     }
 }
 
 function set_sr_name(link) {
     var name = $(link).text();
     $("#sr-autocomplete").trigger('focus').val(name);
+    $("#sr-autocomplete").trigger("sr-changed");
 }
 
 /*** tabbed pane stuff ***/
@@ -1193,24 +1200,6 @@ function big_mod_action(elem, dir) {
    return false;
 }
 
-function juryvote(elem, dir) {
-   var thing_id = elem.thing_id();
-
-   if (elem.hasClass("pressed")) {
-      dir = 0;
-   }
-
-   elem.toggleClass("pressed");
-   elem.siblings(".pretty-button").removeClass("pressed");
-
-   d = {
-         id: thing_id,
-         dir: dir
-       };
-   $.request("juryvote", d, null, true);
-   elem.siblings(".thanks-for-voting").show();
-   return false;
-}
 
 /* The ready method */
 $(function() {
@@ -1319,6 +1308,17 @@ function show_unfriend(account_fullname) {
                 $(this).html("");
             }
         });
+}
+
+function show_saved(comment_fullname) {
+    var comment = $('.id-' + comment_fullname),
+        buttons = comment.find('.buttons').first(),
+        save = buttons.find('.comment-save-button')
+        form = '<li class="comment-unsave-button"><form action="/post/unsave" method="post" class="state-button unsave-button">'
+    form = form + '<input type="hidden" name="executed" value="unsaved"/><span>'
+    form = form + '<a href="javascript:void(0)" onclick="return change_state(this, \'unsave\', unsave_thing);">unsave</a></span></form></li>'
+    save.replaceWith(form)
+    comment.addClass('saved')
 }
 
 function search_feedback(elem, approval) {

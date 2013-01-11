@@ -23,20 +23,26 @@
 <%namespace file="printablebuttons.html" import="ynbutton" />
 <%namespace name="utils" file="utils.html"/>
 
+<%!
+   from urllib import quote
+   from r2.lib.pages import WrappedUser
+%>
+
 <div class="fancy-settings">
     %if thing.show_settings:
         <form id="pagesettings" method="post">
+            <input type="hidden" name="uh" value="${c.modhash}" />
             <%utils:line_field title=" ${_('who can edit this page?')}">
                 <input type="radio" name="permlevel" id="permlevel0" value="0"
                     %if thing.permlevel == 0:
                         checked
                     %endif
-                /><label for="permlevel0">${_('anyone may edit')}</label><br/>
+                /><label for="permlevel0">${_('use subreddit wiki permissions')}</label><br/>
                 <input type="radio" name="permlevel" id="permlevel1" value="1"
                 %if thing.permlevel == 1:
                     checked
                 %endif
-                /><label for="permlevel1">${_('only approved wiki contributors may edit')}</label><br/>
+                /><label for="permlevel1">${_('only approved wiki contributors for this page may edit')}</label><br/>
                 <input type="radio" name="permlevel" id="permlevel2" value="2"
                 %if thing.permlevel == 2:
                     checked
@@ -45,10 +51,10 @@
             </%utils:line_field>
         </form>
     %endif
-    %if thing.permlevel != 2:
+    %if thing.show_editors and thing.permlevel != 2:
     <br/>
     <%utils:line_field title="${_('allow users to edit page')}">
-        <form id="WikiAllowEditor" data-page="${c.page}" onsubmit="r.wiki.addUser(event)">
+        <form id="WikiAllowEditor" onsubmit="r.wiki.addUser(event)">
             <input name="username" maxlength="32" type="text" style="width: 430px;" />
             <button type="submit" style="font-size: 100%;">${_('add')}</button>
             <h3 class="error" style="display:none" id="usereditallowerror">${_('username does not exist')}</h2>
@@ -57,14 +63,14 @@
         <ul>
         %for user in thing.mayedit:
             <li>
-                ${user}
+                ${WrappedUser(user)}
                 &mdash;&nbsp;
-                ${ynbutton(_("(remove)"), _("done"), "../r/%s/wiki/api/alloweditor/del/%s/%s" % (c.site.name, user, c.page), post_callback="$.refresh")}
+                ${ynbutton(_("delete"), _("done"), quote("..%s/alloweditor/del" % (c.wiki_api_url)), hidden_data=dict(username=user.name, page=thing.page), post_callback="$.refresh")}
             </li>
         %endfor
         </ul>
     </%utils:line_field>
     %endif
 
-    <input type="submit" onclick="$('#pagesettings').submit()" value="${_('save settings')}" />
+    <input type="submit" class="wiki_button" onclick="$('#pagesettings').submit()" value="${_('save settings')}" />
 </div>

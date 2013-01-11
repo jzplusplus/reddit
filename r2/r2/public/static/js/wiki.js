@@ -1,6 +1,22 @@
 r.wiki = {
-    baseUrl: function() {
-        base_url = '/wiki'
+    request: function(req) {
+        if (r.config.logged) {
+            req.data.uh = r.config.modhash
+        }
+        req.data.page = r.config.wiki_page
+        $.ajax(req)
+    },
+
+    baseApiUrl: function() {
+        return r.wiki.baseUrl(true)
+    },
+
+    baseUrl: function(api) {
+        var base_url = ''
+        if (api) {
+            base_url += '/api'
+        }
+        base_url += '/wiki'
         if (!r.config.is_fake) {
             base_url = '/r/' + r.config.post_site + base_url
         }
@@ -14,13 +30,16 @@ r.wiki = {
     toggleHide: function(event) {
         event.preventDefault()
         var $this = $(this),
-            url = r.wiki.baseUrl() + '/api/hide/' + $this.data('revision') + '/' + $this.data('page'),
+            url = r.wiki.baseApiUrl() + '/hide',
             $this_parent = $this.parents('.revision')
         $this_parent.toggleClass('hidden')
-        $.ajax({
+        r.wiki.request({
             url: url,
             type: 'POST',
             dataType: 'json',
+            data: {
+                revision: $this.data('revision')
+            },
             error: function() {
                 $this_parent.toggleClass('hidden')
             },
@@ -38,10 +57,13 @@ r.wiki = {
         event.preventDefault()
         $('#usereditallowerror').hide()
         var $this = $(event.target),
-            url = r.wiki.baseUrl() + '/api/alloweditor/add/' + $this.find('[name="username"]').val() + '/' + $this.data('page')
-        $.ajax({
+            url = r.wiki.baseApiUrl() + '/alloweditor/add'
+        r.wiki.request({
             url: url,
             type: 'POST',
+            data: {
+                username: $this.find('[name="username"]').val()
+            },
             dataType: 'json',
             error: function() {
                 $('#usereditallowerror').show()
@@ -55,23 +77,24 @@ r.wiki = {
     submitEdit: function(event) {
         event.preventDefault()
         var $this = $(event.target),
-            url = r.wiki.baseUrl() + '/api/edit/' + $this.data('page'),
+            url = r.wiki.baseApiUrl() + '/edit',
             conflict = $('#wiki_edit_conflict'),
             special = $('#wiki_special_error')
         conflict.hide()
         special.hide()
-        $.ajax({
+        params = r.utils.serializeForm($this)
+        r.wiki.request({
             url: url,
             type: 'POST',
             dataType: 'json',
-            data: $this.serialize(),
+            data: params,
             success: function() {
-                window.location = r.wiki.baseUrl() + '/' + $this.data('page')
+                window.location = r.wiki.baseUrl() + '/' + r.config.wiki_page
             },
             statusCode: {
                 409: function(xhr) {
                     var info = JSON.parse(xhr.responseText)
-                        ,content = $this.children('#content')
+                        ,content = $this.children('#wiki_page_content')
                     conflict.children('#youredit').val(content.val())
                     conflict.children('#yourdiff').html(info.diffcontent)
                     $this.children('#previous').val(info.newrevision)
@@ -98,10 +121,10 @@ r.wiki = {
         })
     },
 
-    goCompare: function(page, base) {
+    goCompare: function() {
         v1 = $('input:radio[name=v1]:checked').val()
         v2 = $('input:radio[name=v2]:checked').val()
-        url = base + '/' + page + '?v=' + v1
+        url = r.wiki.baseUrl() + '/' + r.config.wiki_page + '?v=' + v1
         if (v2 != v1) {
             url += '&v2=' + v2
         }

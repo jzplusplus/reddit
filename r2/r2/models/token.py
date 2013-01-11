@@ -20,15 +20,17 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+import datetime
 from os import urandom
 from base64 import urlsafe_b64encode
 
 from pycassa.system_manager import ASCII_TYPE, DATE_TYPE, UTF8_TYPE
 
+from pylons.i18n import _
+
 from r2.lib.db import tdb_cassandra
 from r2.lib.db.thing import NotFound
 from r2.models.account import Account
-
 
 def generate_token(size):
     return urlsafe_b64encode(urandom(size)).rstrip("=")
@@ -91,6 +93,117 @@ class ConsumableToken(Token):
     def consume(self):
         self.used = True
         self._commit()
+
+
+class OAuth2Scope:
+    scope_info = {
+        "edit": {
+            "id": "edit",
+            "name": _("Edit Posts"),
+            "description": _("Edit and delete my comments and submissions."),
+        },
+        "identity": {
+            "id": "identity",
+            "name": _("My Identity"),
+            "description": _("Access my reddit username and signup date."),
+        },
+        "modflair": {
+            "id": "modflair",
+            "name": _("Moderate Flair"),
+            "description": _(
+                "Manage and assign flair in subreddits I moderate."),
+        },
+        "modposts": {
+            "id": "modposts",
+            "name": _("Moderate Posts"),
+            "description": _(
+                "Approve, remove, mark nsfw, and distinguish content"
+                " in subreddits I moderate."),
+        },
+        "modconfig": {
+            "id": "modconfig",
+            "name": _("Moderate Subreddit Configuration"),
+            "description": _(
+                "Manage the configuration, sidebar, and CSS"
+                " of subreddits I moderate."),
+        },
+        "modlog": {
+            "id": "modlog",
+            "name": _("Moderation Log"),
+            "description": _(
+                "Access the moderation log in subreddits I moderate."),
+        },
+        "modtraffic": {
+            "id": "modtraffic",
+            "name": _("Subreddit Traffic"),
+            "description": _("Access traffic stats in subreddits I moderate."),
+        },
+        "mysubreddits": {
+            "id": "mysubreddits",
+            "name": _("My Subreddits"),
+            "description": _(
+                "Access the list of subreddits I moderate, contribute to,"
+                " and subscribe to."),
+        },
+        "privatemessages": {
+            "id": "privatemessages",
+            "name": _("Private Messages"),
+            "description": _(
+                "Access my inbox and send private messages to other users."),
+        },
+        "read": {
+            "id": "read",
+            "name": _("Read Content"),
+            "description": _("Access posts and comments through my account."),
+        },
+        "submit": {
+            "id": "submit",
+            "name": _("Submit Content"),
+            "description": _("Submit links and comments from my account."),
+        },
+        "subscribe": {
+            "id": "subscribe",
+            "name": _("Edit My Subscriptions"),
+            "description": _("Manage my subreddit subscriptions."),
+        },
+        "vote": {
+            "id": "vote",
+            "name": _("Vote"),
+            "description":
+                _("Submit and change my votes on comments and submissions."),
+        },
+    }
+
+    def __init__(self, scope_str=None):
+        if scope_str:
+            self._parse_scope_str(scope_str)
+        else:
+            self.subreddit_only = False
+            self.subreddits = set()
+            self.scopes = set()
+
+    def _parse_scope_str(self, scope_str):
+        srs, sep, scopes = scope_str.rpartition(':')
+        if sep:
+            self.subreddit_only = True
+            self.subreddits = set(srs.split('+'))
+        else:
+            self.subreddit_only = False
+            self.subreddits = set()
+        self.scopes = set(scopes.split(','))
+
+    def __str__(self):
+        if self.subreddit_only:
+            sr_part = '+'.join(sorted(self.subreddits)) + ':'
+        else:
+            sr_part = ''
+        return sr_part + ','.join(sorted(self.scopes))
+
+    def is_valid(self):
+        return all(scope in self.scope_info for scope in self.scopes)
+
+    def details(self):
+        return [(scope, self.scope_info[scope]) for scope in self.scopes]
 
 
 class OAuth2Client(Token):
@@ -200,22 +313,30 @@ class OAuth2Client(Token):
 
     @classmethod
     def _by_user(cls, account):
-        """Returns a (possibly empty) list of client-scope pairs for which Account has outstanding access tokens."""
+        """Returns a (possibly empty) list of client-scope-expiration triples for which Account has outstanding access tokens."""
 
-        client_ids = set()
-        client_id_to_scope = {}
-        for token in OAuth2AccessToken._by_user(account):
-            if token.check_valid():
-                client_id_to_scope.setdefault(token.client_id, set()).update(
-                    token.scope_list)
+        refresh_tokens = {
+            token._id: token for token in OAuth2RefreshToken._by_user(account)
+            if token.check_valid()}
+        access_tokens = [token for token in OAuth2AccessToken._by_user(account)
+                         if token.check_valid()]
 
-        clients = cls._byID(client_id_to_scope.keys())
-        return [(client, list(client_id_to_scope.get(client_id, [])))
-                for client_id, client in clients.iteritems()]
+        tokens = refresh_tokens.values()
+        tokens.extend(token for token in access_tokens
+                      if token.refresh_token not in refresh_tokens)
+
+        clients = cls._byID([token.client_id for token in tokens])
+        return [(clients[token.client_id], OAuth2Scope(token.scope),
+                 token.date + datetime.timedelta(seconds=token._ttl)
+                     if token._ttl else None)
+                for token in tokens]
 
     def revoke(self, account):
         """Revoke all of the outstanding OAuth2AccessTokens associated with this client and user Account."""
 
+        for token in OAuth2RefreshToken._by_user(account):
+            if token.client_id == self._id:
+                token.revoke()
         for token in OAuth2AccessToken._by_user(account):
             if token.client_id == self._id:
                 token.revoke()
@@ -232,25 +353,25 @@ class OAuth2ClientsByDeveloper(tdb_cassandra.View):
 class OAuth2AuthorizationCode(ConsumableToken):
     """An OAuth2 authorization code for completing authorization flow"""
     token_size = 20
-    _ttl = 10 * 60
+    _ttl = datetime.timedelta(minutes=10)
     _defaults = dict(ConsumableToken._defaults.items() + [
                          ("client_id", ""),
                          ("redirect_uri", ""),
                          ("scope", ""),
-                     ]
-                )
+                         ("refreshable", False)])
+    _bool_props = ConsumableToken._bool_props + ("refreshable",)
     _warn_on_partial_ttl = False
     _use_db = True
     _connection_pool = "main"
 
     @classmethod
-    def _new(cls, client_id, redirect_uri, user_id, scope_list):
-        scope = ','.join(scope_list)
+    def _new(cls, client_id, redirect_uri, user_id, scope, refreshable):
         return super(OAuth2AuthorizationCode, cls)._new(
                 client_id=client_id,
                 redirect_uri=redirect_uri,
                 user_id=user_id,
-                scope=scope)
+                scope=str(scope),
+                refreshable=refreshable)
 
     @classmethod
     def use_token(cls, _id, client_id, redirect_uri):
@@ -266,24 +387,30 @@ class OAuth2AuthorizationCode(ConsumableToken):
 class OAuth2AccessToken(Token):
     """An OAuth2 access token for accessing protected resources"""
     token_size = 20
-    _ttl = 10 * 60
+    _ttl = datetime.timedelta(minutes=60)
     _defaults = dict(scope="",
                      token_type="bearer",
+                     refresh_token=None,
                     )
     _use_db = True
     _connection_pool = "main"
 
     @classmethod
-    def _new(cls, client_id, user_id, scope):
+    def _new(cls, client_id, user_id, scope, refresh_token=None):
         return super(OAuth2AccessToken, cls)._new(
                      client_id=client_id,
                      user_id=user_id,
-                     scope=scope)
+                     scope=str(scope),
+                     refresh_token=refresh_token)
+
+    @classmethod
+    def _by_user_view(cls):
+        return OAuth2AccessTokensByUser
 
     def _on_create(self):
-        """Updates the OAuth2AccessTokensByUser index upon creation."""
+        """Updates the by-user view upon creation."""
 
-        OAuth2AccessTokensByUser._set_values(str(self.user_id), {self._id: ''})
+        self._by_user_view()._set_values(str(self.user_id), {self._id: ''})
         return super(OAuth2AccessToken, self)._on_create()
 
     def check_valid(self):
@@ -304,7 +431,7 @@ class OAuth2AccessToken(Token):
         # Is the user account still valid?
         try:
             account = Account._byID36(self.user_id)
-            if account._deleted or account._spam:
+            if account._deleted:
                 raise NotFound
         except NotFound:
             return False
@@ -318,7 +445,7 @@ class OAuth2AccessToken(Token):
         self._commit()
 
         try:
-            tba = OAuth2AccessTokensByUser._byID(self.user_id)
+            tba = self._by_user_view()._byID(self.user_id)
             del tba[self._id]
         except (tdb_cassandra.NotFound, KeyError):
             # Not fatal, since self.check_valid() will still be False.
@@ -338,16 +465,12 @@ class OAuth2AccessToken(Token):
         """Returns a (possibly empty) list of valid access tokens for a given user Account."""
 
         try:
-            tba = OAuth2AccessTokensByUser._byID(account._id36)
+            tba = cls._by_user_view()._byID(account._id36)
         except tdb_cassandra.NotFound:
             return []
 
         tokens = cls._byID(tba._values().keys())
         return [token for token in tokens.itervalues() if token.check_valid()]
-
-    @property
-    def scope_list(self):
-        return self.scope.split(',')
 
 class OAuth2AccessTokensByUser(tdb_cassandra.View):
     """Index listing the outstanding access tokens for an account."""
@@ -358,10 +481,31 @@ class OAuth2AccessTokensByUser(tdb_cassandra.View):
     _view_of = OAuth2AccessToken
     _connection_pool = 'main'
 
+
+class OAuth2RefreshToken(OAuth2AccessToken):
+    """A refresh token for obtaining new access tokens for the same grant."""
+
+    _type_prefix = None
+    _ttl = None
+
+    @classmethod
+    def _by_user_view(cls):
+        return OAuth2RefreshTokensByUser
+
+class OAuth2RefreshTokensByUser(tdb_cassandra.View):
+    """Index listing the outstanding refresh tokens for an account."""
+
+    _use_db = True
+    _ttl = OAuth2RefreshToken._ttl
+    _type_prefix = 'OAuth2RefreshTokensByUser'
+    _view_of = OAuth2RefreshToken
+    _connection_pool = 'main'
+
+
 class EmailVerificationToken(ConsumableToken):
     _use_db = True
     _connection_pool = "main"
-    _ttl = 60 * 60 * 12
+    _ttl = datetime.timedelta(hours=12)
     token_size = 20
 
     @classmethod
@@ -376,7 +520,7 @@ class EmailVerificationToken(ConsumableToken):
 class PasswordResetToken(ConsumableToken):
     _use_db = True
     _connection_pool = "main"
-    _ttl = 60 * 60 * 12
+    _ttl = datetime.timedelta(hours=12)
     token_size = 20
 
     @classmethod

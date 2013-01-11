@@ -27,7 +27,7 @@ from r2.lib.db           import tdb_cassandra
 from r2.lib.memoize      import memoize
 from r2.lib.utils        import modhash, valid_hash, randstr, timefromnow
 from r2.lib.utils        import UrlParser
-from r2.lib.utils        import constant_time_compare
+from r2.lib.utils        import constant_time_compare, canonicalize_email
 from r2.lib.cache        import sgm
 from r2.lib import filters
 from r2.lib.log import log_text
@@ -101,7 +101,7 @@ class Account(Thing):
                      has_subscribed = False,
                      pref_media = 'subreddit',
                      share = {},
-                     wiki_override = True,
+                     wiki_override = None,
                      email = "",
                      email_verified = False,
                      ignorereports = False,
@@ -111,7 +111,17 @@ class Account(Thing):
                      gold_creddits = 0,
                      gold_creddit_escrow = 0,
                      otp_secret=None,
+                     state=0,
                      )
+
+    def __eq__(self, other):
+        if type(self) != type(other):
+            return False
+
+        return self._id == other._id
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
 
     def has_interacted_with(self, sr):
         if not sr:
@@ -172,17 +182,12 @@ class Account(Thing):
         karma = self.link_karma
         return max(karma, 1) if karma > -1000 else karma
 
-    def can_wiki(self):
+    def can_wiki(self, default=False):
         if self.wiki_override is None:
-            # Legacy, None means user may wiki
-            return True
+            if not default:
+                return self.link_karma > 100 or self.comment_karma > 100
+            return default
         return self.wiki_override
-    
-    def jury_betatester(self):
-        if g.cache.get("jury-killswitch"):
-            return False
-        else:
-            return True
 
     def all_karmas(self):
         """returns a list of tuples in the form (name, hover-text, link_karma,
@@ -383,6 +388,39 @@ class Account(Thing):
         for client in OAuth2Client._by_developer(self):
             client.remove_developer(self)
 
+    # 'State' bitfield properties
+    @property
+    def _banned(self):
+        return self.state & 1
+
+    @_banned.setter
+    def _banned(self, value):
+        if value and not self._banned:
+            self.state |= 1
+            # Invalidate all cookies by changing the password
+            # First back up the password so we can reverse this
+            self.backup_password = self.password
+            # New PW doesn't matter, they can't log in with it anyway.
+            # Even if their PW /was/ 'banned' for some reason, this
+            # will change the salt and thus invalidate the cookies
+            change_password(self, 'banned') 
+
+            # deauthorize all access tokens
+            from r2.models.token import OAuth2AccessToken
+            from r2.models.token import OAuth2RefreshToken
+
+            OAuth2AccessToken.revoke_all_by_user(self)
+            OAuth2RefreshToken.revoke_all_by_user(self)
+        elif not value and self._banned:
+            self.state &= ~1
+
+            # Undo the password thing so they can log in
+            self.password = self.backup_password
+
+            # They're on their own for OAuth tokens, though.
+
+        self._commit()
+
     @property
     def subreddits(self):
         from subreddit import Subreddit
@@ -532,19 +570,7 @@ class Account(Thing):
         return which.get(canon, None)
 
     def canonical_email(self):
-        email = str(self.email.lower())
-        if email.count("@") != 1:
-            return "invalid@invalid.invalid"
-
-        localpart, domain = email.split("@")
-
-        # a.s.d.f+something@gmail.com --> asdf@gmail.com
-        localpart.replace(".", "")
-        plus = localpart.find("+")
-        if plus > 0:
-            localpart = localpart[:plus]
-
-        return localpart + "@" + domain
+        return canonicalize_email(self.email)
 
     def cromulent(self):
         """Return whether the user has validated their email address and
@@ -606,6 +632,8 @@ class FakeAccount(Account):
     _nodb = True
     pref_no_profanity = True
 
+    def __eq__(self, other):
+        return self is other
 
 def valid_admin_cookie(cookie):
     if g.read_only_mode:
@@ -693,6 +721,8 @@ def valid_login(name, password):
         return False
 
     if not a._loaded: a._load()
+    if a._banned:
+        return False
     return valid_password(a, password)
 
 def valid_password(a, password):
@@ -749,7 +779,7 @@ def change_password(user, newpassword):
     return True
 
 #TODO reset the cache
-def register(name, password):
+def register(name, password, registration_ip):
     try:
         a = Account._by_name(name)
         raise AccountExists
@@ -758,6 +788,7 @@ def register(name, password):
                     password = bcrypt_password(password))
         # new accounts keep the profanity filter settings until opting out
         a.pref_no_profanity = True
+        a.registration_ip = registration_ip
         a._commit()
 
         #clear the caches
@@ -794,7 +825,7 @@ class DeletedUser(FakeAccount):
 class AccountsActiveBySR(tdb_cassandra.View):
     _use_db = True
     _connection_pool = 'main'
-    _ttl = 15*60
+    _ttl = timedelta(minutes=15)
 
     _extra_schema_creation_args = dict(key_validation_class=ASCII_TYPE)
 

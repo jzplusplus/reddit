@@ -21,7 +21,7 @@
 ###############################################################################
 
 <%!
-   from r2.lib.filters import edit_comment_filter, unsafe
+   from r2.lib.filters import unsafe
    from r2.lib.pages.things import CommentButtons
    from r2.lib.pages import WrappedUser
 %>
@@ -111,6 +111,15 @@ ${parent.collapsed()}
     ${thing_timestamp(thing, thing.timesince)}&#32;${_("ago")}
     ${edited(thing, thing.lastedited)}
   %endif
+
+  % if thing.gilded_message:
+  <span class="gilded-comment-icon" title="${thing.gilded_message}" data-count="${thing.gildings}">
+    % if thing.gildings > 1:
+      x${thing.gildings}
+    % endif
+  </span>
+  % endif
+
   %if collapse:
     &nbsp;<a href="#" class="expand"
        onclick="return showcomment(this)">

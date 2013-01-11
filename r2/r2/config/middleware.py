@@ -31,7 +31,7 @@ from paste.cascade import Cascade
 from paste.registry import RegistryManager
 from paste.urlparser import StaticURLParser
 from paste.deploy.converters import asbool
-from pylons import config, Response
+from pylons import config, response
 from pylons.error import error_template
 from pylons.middleware import ErrorDocuments, ErrorHandler, StaticJavascripts
 from pylons.wsgiapp import PylonsApp, PylonsBaseWSGIApp
@@ -63,7 +63,7 @@ def error_mapper(code, message, environ, global_conf=None, **kw):
 
     if global_conf is None:
         global_conf = {}
-    codes = [304, 400, 401, 403, 404, 415, 429, 503]
+    codes = [304, 400, 401, 403, 404, 409, 415, 429, 503]
     if not asbool(global_conf.get('debug')):
         codes.append(500)
     if code in codes:
@@ -86,14 +86,8 @@ def error_mapper(code, message, environ, global_conf=None, **kw):
 
         #preserve x-sup-id when 304ing
         if code == 304:
-            #check to see if c is useable
-            try:
-                c.test
-            except TypeError:
-                pass
-            else:
-                if c.response.headers.has_key('x-sup-id'):
-                    d['x-sup-id'] = c.response.headers['x-sup-id']
+            if response.headers.has_key('x-sup-id'):
+                d['x-sup-id'] = response.headers['x-sup-id']
 
         extension = environ.get("extension")
         if extension:
@@ -179,17 +173,15 @@ class DomainMiddleware(object):
 
         # if there was a subreddit subdomain, redirect
         if sr_redirect and environ.get("FULLPATH"):
-            r = Response()
             if not subdomains and g.domain_prefix:
                 subdomains.append(g.domain_prefix)
             subdomains.append(g.domain)
             redir = "%s/r/%s/%s" % ('.'.join(subdomains),
                                     sr_redirect, environ['FULLPATH'])
             redir = "http://" + redir.replace('//', '/')
-            r.status_code = 301
-            r.headers['location'] = redir
-            r.content = ""
-            return r(environ, start_response)
+
+            start_response("301 Moved Permanently", [("Location", redir)])
+            return [""]
 
         return self.app(environ, start_response)
 
@@ -304,34 +296,28 @@ class LimitUploadSize(object):
         cl_key = 'CONTENT_LENGTH'
         if environ['REQUEST_METHOD'] == 'POST':
             if cl_key not in environ:
-                r = Response()
-                r.status_code = 411
-                r.content = '<html><head></head><body>length required</body></html>'
-                return r(environ, start_response)
+                start_response("411 Length Required", [])
+                return ['<html><body>length required</body></html>']
 
             try:
                 cl_int = int(environ[cl_key])
             except ValueError:
-                r = Response()
-                r.status_code = 400
-                r.content = '<html><head></head><body>bad request</body></html>'
-                return r(environ, start_response)
+                start_response("400 Bad Request", [])
+                return ['<html><body>bad request</body></html>']
 
             if cl_int > self.max_size:
                 from r2.lib.strings import string_dict
                 error_msg = string_dict['css_validator_messages']['max_size'] % dict(max_size = self.max_size/1024)
-                r = Response()
-                r.status_code = 413
-                r.content = ("<html>"
-                             "<head>"
-                             "<script type='text/javascript'>"
-                             "parent.completedUploadImage('failed',"
-                             "''," 
-                             "''," 
-                             "[['BAD_CSS_NAME', ''], ['IMAGE_ERROR', '", error_msg,"']],"
-                             "'image-upload');"
-                             "</script></head><body>you shouldn\'t be here</body></html>")
-                return r(environ, start_response)
+                start_response("413 Too Big", [])
+                return ["<html>"
+                        "<head>"
+                        "<script type='text/javascript'>"
+                        "parent.completedUploadImage('failed',"
+                        "'',"
+                        "'',"
+                        "[['BAD_CSS_NAME', ''], ['IMAGE_ERROR', '", error_msg,"']],"
+                        "'image-upload');"
+                        "</script></head><body>you shouldn\'t be here</body></html>"]
 
         return self.app(environ, start_response)
 

@@ -20,11 +20,11 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
-from validator import *
 from reddit_base import MinimalController
 
 from r2.lib.scraper import get_media_embed
-from r2.lib.pages import MediaEmbedBody, render_ad
+from r2.lib.pages import MediaEmbedBody, render_ad, render_ad_by_codename
+from r2.lib.validator import *
 
 from pylons import request
 from pylons.controllers.util import abort
@@ -56,7 +56,7 @@ class MediaembedController(MinimalController):
 
 class AdController(MinimalController):
     def request_key(self):
-        return make_key('request_key',
+        return make_key('request_',
                         c.lang,
                         c.content_langs,
                         request.host,
@@ -72,5 +72,5 @@ class AdController(MinimalController):
         if not codename:
             abort(404)
         c.render_style = "html"
-        return render_ad(codename=codename)
+        return render_ad_by_codename(codename)
 

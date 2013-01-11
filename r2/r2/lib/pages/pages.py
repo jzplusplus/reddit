@@ -22,26 +22,25 @@
 
 from r2.lib.wrapped import Wrapped, Templated, CachedTemplate
 from r2.models import Account, FakeAccount, DefaultSR, make_feedurl
-from r2.models import FakeSubreddit, Subreddit, Ad, AdSR, SubSR
+from r2.models import FakeSubreddit, Subreddit, Ad, AdSR, SubSR, AllMinus, AllSR
 from r2.models import Friends, All, Sub, NotFound, DomainSR, Random, Mod, RandomNSFW, MultiReddit, ModSR, Frontpage
 from r2.models import Link, Printable, Trophy, bidding, PromoCampaign, PromotionWeights, Comment
 from r2.models import Flair, FlairTemplate, FlairTemplateBySubredditIndex
 from r2.models import USER_FLAIR, LINK_FLAIR
-from r2.models.token import OAuth2Client
+from r2.models.promo import PromotionLog
+from r2.models.token import OAuth2Client, OAuth2AccessToken
 from r2.models import traffic
 from r2.models import ModAction
 from r2.models import Thing
 from r2.config import cache
 from r2.config.extensions import is_api
 from r2.lib.menus import CommentSortMenu
-from r2.lib.tracking import AdframeInfo
-from r2.lib.jsonresponse import json_respond
 from pylons.i18n import _, ungettext
 from pylons import c, request, g
 from pylons.controllers.util import abort
 
 from r2.lib import media
-from r2.lib import promote
+from r2.lib import promote, tracking
 from r2.lib.captcha import get_iden
 from r2.lib.filters import spaceCompress, _force_unicode, _force_utf8
 from r2.lib.filters import unsafe, websafe, SC_ON, SC_OFF, websafe_json
@@ -51,7 +50,7 @@ from r2.lib.menus import OffsiteButton, menu, JsNavMenu
 from r2.lib.strings import plurals, rand_strings, strings, Score
 from r2.lib.utils import title_to_url, query_string, UrlParser, to_js, vote_hash
 from r2.lib.utils import link_duplicates, make_offset_date, median, to36
-from r2.lib.utils import trunc_time, timesince, timeuntil
+from r2.lib.utils import trunc_time, timesince, timeuntil, weighted_lottery
 from r2.lib.template_helpers import add_sr, get_domain, format_number
 from r2.lib.subreddit_search import popular_searches
 from r2.lib.scraper import get_media_embed
@@ -89,13 +88,12 @@ def responsive(res, space_compress = False):
     controller so that it becomes compatible with the page cache.
     """
     if is_api():
-        res = json_respond(res)
+        res = websafe_json(simplejson.dumps(res or ''))
         if c.allowed_callback:
             res = "%s(%s)" % (websafe_json(c.allowed_callback), res)
     elif space_compress:
         res = spaceCompress(res)
-    c.response.content = res
-    return c.response
+    return res
 
 class Reddit(Templated):
     '''Base class for rendering a page on reddit.  Handles toolbar creation,
@@ -131,18 +129,19 @@ class Reddit(Templated):
     show_firsttext     = True
     content_id         = None
     css_class          = None
-    additional_css     = None
     extra_page_classes = None
 
     def __init__(self, space_compress = True, nav_menus = None, loginbox = True,
                  infotext = '', content = None, short_description='', title = '', robots = None, 
                  show_sidebar = True, footer = True, srbar = True, page_classes = None,
-                 **context):
+                 show_wiki_actions = False, extra_js_config = None, **context):
         Templated.__init__(self, **context)
         self.title          = title
         self.short_description = short_description
         self.robots         = robots
         self.infotext       = infotext
+        self.extra_js_config = extra_js_config
+        self.show_wiki_actions = show_wiki_actions
         self.loginbox       = True
         self.show_sidebar   = show_sidebar
         self.space_compress = space_compress and not g.template_debug
@@ -154,6 +153,7 @@ class Reddit(Templated):
         self.nav_menu = MenuArea(menus = nav_menus) if nav_menus else None
 
         #add the infobar
+        self.welcomebar = None
         self.infobar = None
         # generate a canonical link for google
         self.canonical_link = request.fullpath
@@ -175,18 +175,42 @@ class Reddit(Templated):
                 infotext = strings.iphone_first
             elif g.announcement_message:
                 infotext = g.announcement_message
-            elif c.firsttime and c.site.firsttext:
-                infotext = c.site.firsttext
+
+        if isinstance(c.site, DomainSR) and c.site.domain.endswith("imgur.com"):
+            self.infobar = InfoBar(
+                message=_("imgur.com domain listings (including this one) are "
+                          "currently disabled to speed up vote processing.")
+            )
 
         if infotext:
             self.infobar = InfoBar(message = infotext)
+
+        if isinstance(c.site, AllMinus) and not c.user.gold:
+            if not self.infobar:
+                self.infobar = InfoBar(message=strings.all_minus_gold_only, extra_class="gold")
+
+        if c.firsttime:
+            self.welcomebar = WelcomeBar()
 
         self.srtopbar = None
         if srbar and not c.cname and not is_api():
             self.srtopbar = SubredditTopBar()
 
-        if c.user_is_loggedin and self.show_sidebar and not is_api():
-            self._content = PaneStack([ShareLink(), content])
+        if (c.user_is_loggedin and self.show_sidebar
+            and not is_api() and not self.show_wiki_actions):
+            # insert some form templates for js to use
+            # TODO: move these to client side templates
+            gold = GoldPayment("gift",
+                               "monthly",
+                               months=1,
+                               signed=False,
+                               recipient="",
+                               giftmessage=None,
+                               passthrough=None,
+                               comment=True,
+                               clone_template=True,
+                              )
+            self._content = PaneStack([ShareLink(), content, gold])
         else:
             self._content = content
 
@@ -286,28 +310,36 @@ class Reddit(Templated):
             ps.append(SponsorshipBox())
 
         no_ads_yet = True
+        show_adbox = (c.user.pref_show_adbox or not c.user.gold) and not g.disable_ads
         if isinstance(c.site, (MultiReddit, ModSR)) and c.user_is_loggedin:
-            srs = Subreddit._byID(c.site.sr_ids,data=True,
+            srs = Subreddit._byID(c.site.sr_ids, data=True,
                                   return_dict=False)
             if c.user_is_admin or c.site.is_moderator(c.user):
                 ps.append(self.sr_admin_menu())
 
             if srs:
-                ps.append(SideContentBox(_('these subreddits'),[SubscriptionBox(srs=srs)]))
+                if isinstance(c.site, ModSR):
+                    box = SubscriptionBox(srs, multi_text=strings.mod_multi)
+                else:
+                    box = SubscriptionBox(srs)
+                ps.append(SideContentBox(_('these subreddits'), [box]))
+
+        if isinstance(c.site, AllSR):
+            ps.append(AllInfoBar(c.site, c.user))
 
         # don't show the subreddit info bar on cnames unless the option is set
         if not isinstance(c.site, FakeSubreddit) and (not c.cname or c.site.show_cname_sidebar):
             ps.append(SubredditInfoBar())
             moderator = c.user_is_loggedin and (c.user_is_admin or 
                                           c.site.is_moderator(c.user))
-            if c.show_wiki_actions:
+            if self.show_wiki_actions:
                 ps.append(self.wiki_actions_menu(moderator=moderator))
             if moderator:
                 ps.append(self.sr_admin_menu())
-            if (c.user.pref_show_adbox or not c.user.gold) and not g.disable_ads:
+            if show_adbox:
                 ps.append(Ads())
             no_ads_yet = False
-        elif c.show_wiki_actions:
+        elif self.show_wiki_actions:
             ps.append(self.wiki_actions_menu())
 
         user_banned = c.user_is_loggedin and c.site.is_banned(c.user)
@@ -353,10 +385,10 @@ class Reddit(Templated):
                                          more_href = mod_href,
                                          more_text = more_text))
 
-
-        if no_ads_yet and not g.disable_ads:
-            if c.user.pref_show_adbox or not c.user.gold:
-                ps.append(Ads())
+        if no_ads_yet and show_adbox:
+            ps.append(Ads())
+            if g.live_config["goldvertisement_blurbs"]:
+                ps.append(Goldvertisement())
 
         if c.user.pref_clickgadget and c.recent_clicks:
             ps.append(SideContentBox(_("Recently viewed links"),
@@ -384,13 +416,13 @@ class Reddit(Templated):
         if c.user_is_loggedin:
             if c.user.name in g.admins:
                 if c.user_is_admin:
-                   buttons += [NamedButton("adminoff", False,
-                                           nocname=not c.authorized_cname,
-                                           target = "_self")]
+                   buttons += [OffsiteButton(_("turn admin off"),
+                                             dest=g.https_endpoint + "/adminoff",
+                                             target = "_self")]
                 else:
-                   buttons += [NamedButton("adminon",  False,
-                                           nocname=not c.authorized_cname,
-                                           target = "_self")]
+                   buttons += [OffsiteButton(_("turn admin on"),
+                                             dest=g.https_endpoint + "/adminon",
+                                             target = "_self")]
             buttons += [NamedButton("prefs", False,
                                   css_class = "pref-lang")]
         else:
@@ -423,7 +455,7 @@ class Reddit(Templated):
             if c.user_is_loggedin:
                 mod = bool(c.user_is_admin or c.site.is_moderator(c.user))
             if c.site._should_wiki and (c.site.wikimode != 'disabled' or mod):
-                if not g.wiki_disabled:
+                if not g.disable_wiki:
                     main_buttons.append(NavButton('wiki', 'wiki'))
 
         more_buttons = []
@@ -459,7 +491,8 @@ class Reddit(Templated):
 
     def content(self):
         """returns a Wrapped (or renderable) item for the main content div."""
-        return self.content_stack((self.infobar, self.nav_menu, self._content))
+        return self.content_stack((
+            self.welcomebar, self.infobar, self.nav_menu, self._content))
 
     def page_classes(self):
         classes = set()
@@ -475,6 +508,8 @@ class Reddit(Templated):
                     classes.add('cname')
             if c.site.is_moderator(c.user):
                 classes.add('moderator')
+            if c.user.gold:
+                classes.add('gold')
 
         if isinstance(c.site, MultiReddit):
             classes.add('multi-page')
@@ -701,9 +736,7 @@ class PrefApps(Templated):
     """Preference form for managing authorized third-party applications."""
 
     def __init__(self, my_apps, developed_apps):
-        from r2.controllers.oauth2 import scope_info
-        self.my_apps = [(app, [scope_info[scope] for scope in scopes])
-                        for app, scopes in my_apps]
+        self.my_apps = my_apps
         self.developed_apps = developed_apps
         super(PrefApps, self).__init__()
 
@@ -821,7 +854,11 @@ class LoginPage(BoringPage):
             if u.path == '/api/v1/authorize':
                 client_id = u.query_dict.get("client_id")
                 self.client = client_id and OAuth2Client.get_token(client_id)
-                self.infobar = self.client and ClientInfoBar(self.client, strings.oauth_login_msg)
+                if self.client:
+                    self.infobar = ClientInfoBar(self.client,
+                                                 strings.oauth_login_msg)
+                else:
+                    self.infobar = None
 
     def content(self):
         kw = {}
@@ -865,13 +902,19 @@ class Register(Login):
     pass
 
 class OAuth2AuthorizationPage(BoringPage):
-    def __init__(self, client, redirect_uri, scopes, state):
-        from r2.controllers.oauth2 import scope_info
-        scope_details = [scope_info[scope] for scope in scopes]
+    def __init__(self, client, redirect_uri, scope, state, duration):
+        if duration == "permanent":
+            expiration = None
+        else:
+            expiration = (
+                datetime.datetime.now(g.tz)
+                + datetime.timedelta(seconds=OAuth2AccessToken._ttl + 1))
         content = OAuth2Authorization(client=client,
                                       redirect_uri=redirect_uri,
-                                      scope_details=scope_details,
-                                      state=state)
+                                      scope=scope,
+                                      state=state,
+                                      duration=duration,
+                                      expiration=expiration)
         BoringPage.__init__(self, _("request for permission"),
                 show_sidebar=False, content=content)
 
@@ -887,6 +930,7 @@ class SearchPage(BoringPage):
                  num_results, search_params={},
                  simple=False, restrict_sr=False, site=None,
                  syntax=None, converted_data=None, facets={}, sort=None,
+                 recent=None,
                  *a, **kw):
         self.searchbar = SearchBar(prev_search=prev_search,
                                    elapsed_time=elapsed_time,
@@ -895,7 +939,7 @@ class SearchPage(BoringPage):
                                    show_feedback=True, site=site,
                                    simple=simple, restrict_sr=restrict_sr,
                                    syntax=syntax, converted_data=converted_data,
-                                   facets=facets, sort=sort)
+                                   facets=facets, sort=sort, recent=recent)
         BoringPage.__init__(self, pagename, robots='noindex', *a, **kw)
 
     def content(self):
@@ -1052,6 +1096,29 @@ class LinkInfoPage(Reddit):
             rb.insert(1, LinkInfoBar(a = self.link))
         return rb
 
+    def page_classes(self):
+        classes = Reddit.page_classes(self)
+
+        if c.user_is_loggedin and self.link.author == c.user:
+            classes.add("post-submitter")
+
+        time_ago = datetime.datetime.now(g.tz) - self.link._date
+        delta = datetime.timedelta
+        steps = [
+            delta(minutes=10),
+            delta(hours=6),
+            delta(hours=24),
+        ]
+        for step in steps:
+            if time_ago < step:
+                if step < delta(hours=1):
+                    step_str = "%dm" % (step.total_seconds() / 60)
+                else:
+                    step_str = "%dh" % (step.total_seconds() / (60 * 60))
+                classes.add("post-under-%s-old" % step_str)
+
+        return classes
+
 class LinkCommentSep(Templated):
     pass
 
@@ -1074,6 +1141,9 @@ class CommentPane(Templated):
     def __init__(self, article, sort, comment, context, num, **kw):
         # keys: lang, num, can_reply, render_style
         # disable: admin
+
+        timer = g.stats.get_timer("service_time.CommentPaneCache")
+        timer.start()
 
         from r2.models import CommentBuilder, NestedListing
         from r2.controllers.reddit_base import UnloggedUser
@@ -1107,20 +1177,23 @@ class CommentPane(Templated):
                                     parent_name = article._fullname)
             return listing.listing()
 
-        # generate the listing we would make for this user if caching is disabled.
-        my_listing = renderer()
-
-        # for now, disable the cache if the user happens to be an author of anything.
-        if try_cache:
+        # disable the cache if the user is the author of anything in the
+        # thread because of edit buttons etc.
+        my_listing = None
+        if try_cache and c.user_is_loggedin:
+            my_listing = renderer()
             for t in self.listing_iter(my_listing):
                 if getattr(t, "is_author", False):
                     try_cache = False
                     break
 
+        timer.intermediate("try_cache")
+        cache_hit = False
+
         if try_cache:
             # try to fetch the comment tree from the cache
             key = self.cache_key()
-            self.rendered = g.cache.get(key)
+            self.rendered = g.pagecache.get(key)
             if not self.rendered:
                 # spoof an unlogged in user
                 user = c.user
@@ -1134,34 +1207,57 @@ class CommentPane(Templated):
 
                     # render as if not logged in (but possibly with reply buttons)
                     self.rendered = renderer().render()
-                    g.cache.set(key, self.rendered,
-                                time=g.commentpane_cache_time)
+                    g.pagecache.set(
+                        key,
+                        self.rendered,
+                        time=g.commentpane_cache_time
+                    )
 
                 finally:
                     # undo the spoofing
                     c.user = user
                     c.user_is_loggedin = logged_in
+            else:
+                cache_hit = True
 
             # figure out what needs to be updated on the listing
-            likes = []
-            dislikes = []
-            is_friend = set()
-            for t in self.listing_iter(my_listing):
-                if not hasattr(t, "likes"):
-                    # this is for MoreComments and MoreRecursion
-                    continue
-                if getattr(t, "friend", False) and not t.author._deleted:
-                    is_friend.add(t.author._fullname)
-                if t.likes:
-                    likes.append(t._fullname)
-                if t.likes is False:
-                    dislikes.append(t._fullname)
-            self.rendered += ThingUpdater(likes = likes,
-                                          dislikes = dislikes,
-                                          is_friend = is_friend).render()
+            if c.user_is_loggedin:
+                likes = []
+                dislikes = []
+                is_friend = set()
+                gildings = {}
+                saves = set()
+                for t in self.listing_iter(my_listing):
+                    if not hasattr(t, "likes"):
+                        # this is for MoreComments and MoreRecursion
+                        continue
+                    if getattr(t, "friend", False) and not t.author._deleted:
+                        is_friend.add(t.author._fullname)
+                    if t.likes:
+                        likes.append(t._fullname)
+                    if t.likes is False:
+                        dislikes.append(t._fullname)
+                    if t.user_gilded:
+                        gildings[t._fullname] = (t.gilded_message, t.gildings)
+                    if t.saved:
+                        saves.add(t._fullname)
+                self.rendered += ThingUpdater(likes = likes,
+                                              dislikes = dislikes,
+                                              is_friend = is_friend,
+                                              gildings = gildings,
+                                              saves = saves).render()
             g.log.debug("using comment page cache")
         else:
+            my_listing = my_listing or renderer()
             self.rendered = my_listing.render()
+
+        if try_cache:
+            if cache_hit:
+                timer.stop("hit")
+            else:
+                timer.stop("miss")
+        else:
+            timer.stop("uncached")
 
     def listing_iter(self, l):
         for t in l:
@@ -1256,7 +1352,10 @@ class SubredditsPage(Reddit):
 
     def rightbox(self):
         ps = Reddit.rightbox(self)
-        subscribe_box = SubscriptionBox(make_multi=True)
+        srs = Subreddit.user_subreddits(c.user, ids=False, limit=None)
+        srs.sort(key=lambda sr: sr.name.lower())
+        subscribe_box = SubscriptionBox(srs,
+                                        multi_text=strings.subscribed_multi)
         num_reddits = len(subscribe_box.srs)
         ps.append(SideContentBox(_("your front page reddits (%s)") %
                                  num_reddits, [subscribe_box]))
@@ -1371,6 +1470,7 @@ class ProfileBar(Templated):
         self.my_fullname = None
         self.gold_remaining = None
         running_out_of_gold = False
+        self.gold_creddit_message = None
 
         if c.user_is_loggedin:
             if ((user._id == c.user._id or c.user_is_admin)
@@ -1393,6 +1493,14 @@ class ProfileBar(Templated):
 
                 if hasattr(user, "gold_subscr_id"):
                     self.gold_subscr_id = user.gold_subscr_id
+
+                if user.gold_creddits > 0:
+                    msg = ungettext("%(creddits)s gold creddit to give",
+                                    "%(creddits)s gold creddits to give",
+                                    user.gold_creddits)
+                    msg = msg % dict(creddits=user.gold_creddits)
+                    self.gold_creddit_message = msg
+
             if user._id != c.user._id:
                 self.goldlink = "/gold?goldtype=gift&recipient=" + user.name
                 self.giftmsg = _("buy %(user)s a month of reddit gold" %
@@ -1416,6 +1524,16 @@ class InfoBar(Templated):
     """Draws the yellow box at the top of a page for info"""
     def __init__(self, message = '', extra_class = ''):
         Templated.__init__(self, message = message, extra_class = extra_class)
+
+class WelcomeBar(InfoBar):
+    def __init__(self):
+        messages = g.live_config.get("welcomebar_messages")
+        if messages:
+            message = random.choice(messages).split(" / ")
+        else:
+            message = (_("reddit is a platform for internet communities"),
+                       _("where your votes shape what the world is talking about."))
+        InfoBar.__init__(self, message=message)
 
 class ClientInfoBar(InfoBar):
     """Draws the message the top of a login page before OAuth2 authorization"""
@@ -1476,7 +1594,9 @@ class SubredditTopBar(CachedTemplate):
     @property
     def my_reddits(self):
         if self._my_reddits is None:
-            self._my_reddits = Subreddit.user_subreddits(c.user, ids = False)
+            self._my_reddits = Subreddit.user_subreddits(c.user,
+                                                         ids=False,
+                                                         stale=True)
         return self._my_reddits
 
     @property
@@ -1560,21 +1680,17 @@ class SubredditTopBar(CachedTemplate):
 class SubscriptionBox(Templated):
     """The list of reddits a user is currently subscribed to to go in
     the right pane."""
-    def __init__(self, srs=None, make_multi=False):
-        if srs is None:
-            srs = Subreddit.user_subreddits(c.user, ids = False, limit=None)
-        srs.sort(key = lambda sr: sr.name.lower())
+    def __init__(self, srs, multi_text=None):
         self.srs = srs
         self.goldlink = None
         self.goldmsg = None
         self.prelink = None
+        self.multi_path = None
+        self.multi_text = multi_text
 
         # Construct MultiReddit path
-        if make_multi:
-            mr_path = '/r/' + '+'.join([sr.name for sr in srs])
-            subscription_multi_path = mr_path 
-        else:
-            subscription_multi_path = None
+        if multi_text:
+            self.multi_path = '/r/' + '+'.join([sr.name for sr in srs])
 
         if len(srs) > Subreddit.sr_limit and c.user_is_loggedin:
             if not c.user.gold:
@@ -1593,12 +1709,30 @@ class SubscriptionBox(Templated):
                                 _("%s visible") % visible]
 
         Templated.__init__(self, srs=srs, goldlink=self.goldlink,
-                           goldmsg=self.goldmsg, 
-                           subscription_multi_path=subscription_multi_path)
+                           goldmsg=self.goldmsg)
 
     @property
     def reddits(self):
         return wrap_links(self.srs)
+
+
+class AllInfoBar(Templated):
+    def __init__(self, site, user):
+        self.sr = site
+        self.allminus_url = None
+        self.css_class = None
+        if isinstance(site, AllMinus) and c.user.gold:
+            self.description = (strings.r_all_minus_description + "\n\n" +
+                                " ".join("/r/" + sr.name for sr in site.srs))
+            self.css_class = "gold-accent"
+        else:
+            self.description = strings.r_all_description
+            sr_ids = Subreddit.user_subreddits(user)
+            srs = Subreddit._byID(sr_ids, data=True, return_dict=False)
+            if srs:
+                self.allminus_url = '/r/all-' + '-'.join([sr.name for sr in srs])
+        Templated.__init__(self)
+
 
 class CreateSubreddit(Templated):
     """reddit creation form."""
@@ -1611,6 +1745,11 @@ class SubredditStylesheet(Templated):
                  stylesheet_contents = ''):
         Templated.__init__(self, site = site,
                          stylesheet_contents = stylesheet_contents)
+
+class SubredditStylesheetSource(Templated):
+    """A view of the unminified source of a subreddit's stylesheet."""
+    def __init__(self, stylesheet_contents):
+        Templated.__init__(self, stylesheet_contents=stylesheet_contents)
 
 class CssError(Templated):
     """Rendered error returned to the stylesheet editing page via ajax"""
@@ -1637,13 +1776,11 @@ class Thanks(Templated):
         else:
             status = "mundane"
 
-        if g.lounge_reddit:
-            lounge_url = "/r/" + g.lounge_reddit
-            lounge_html = safemarkdown(strings.lounge_msg % dict(link=lounge_url))
-        else:
-            lounge_html = None
-        Templated.__init__(self, status=status, secret=secret,
-                           lounge_html=lounge_html)
+        Templated.__init__(self, status=status, secret=secret)
+
+class GoldThanks(Templated):
+    """An actual 'Thanks for buying gold!' landing page"""
+    pass
 
 class Gold(Templated):
     def __init__(self, goldtype, period, months, signed,
@@ -1664,13 +1801,14 @@ class Gold(Templated):
 
 class GoldPayment(Templated):
     def __init__(self, goldtype, period, months, signed,
-                 recipient, giftmessage, passthrough):
+                 recipient, giftmessage, passthrough, comment,
+                 clone_template=False):
         pay_from_creddits = False
 
         if period == "monthly" or 1 <= months < 12:
-            price = 3.99
+            price = g.gold_month_price.decimal
         else:
-            price = 29.99
+            price = g.gold_year_price.decimal
 
         if c.user_is_admin:
             user_creddits = 50
@@ -1711,7 +1849,9 @@ class GoldPayment(Templated):
                 summary = strings.gold_summary_creddits % dict(
                           amount=Score.somethings(months, "month"))
             elif goldtype == "gift":
-                if signed:
+                if comment:
+                    format = strings.gold_summary_comment_gift
+                elif signed:
                     format = strings.gold_summary_signed_gift
                 else:
                     format = strings.gold_summary_anonymous_gift
@@ -1723,9 +1863,14 @@ class GoldPayment(Templated):
                     # buy by month or spend a multiple of 12 months
                     months = quantity * 12
 
-                summary = format % dict(
-                          amount=Score.somethings(months, "month"),
-                          recipient = recipient.name)
+                if not clone_template:
+                    summary = format % dict(
+                        amount=Score.somethings(months, "month"),
+                        recipient=recipient and recipient.name,
+                    )
+                else:
+                    # leave the replacements to javascript
+                    summary = format
             else:
                 raise ValueError("wtf is %r" % goldtype)
 
@@ -1737,6 +1882,7 @@ class GoldPayment(Templated):
                            pay_from_creddits=pay_from_creddits,
                            passthrough=passthrough,
                            google_id=google_id,
+                           comment=comment, clone_template=clone_template,
                            paypal_buttonid=paypal_buttonid)
 
 class GiftGold(Templated):
@@ -1832,7 +1978,7 @@ class SearchBar(Templated):
                  elapsed_time=0, search_params={}, show_feedback=False,
                  simple=False, restrict_sr=False, site=None, syntax=None,
                  subreddit_search=False, converted_data=None, facets={}, 
-                 sort=None, **kw):
+                 sort=None, recent=None, **kw):
         if header is None:
             header = _("previous search")
         self.header = header
@@ -1852,7 +1998,7 @@ class SearchBar(Templated):
                            site=site, syntax=syntax,
                            converted_data=converted_data,
                            subreddit_search=subreddit_search, facets=facets,
-                           sort=sort)
+                           sort=sort, recent=recent)
 
 class Frame(Wrapped):
     """Frameset for the FrameToolbar used when a user hits /tb/. The
@@ -2230,187 +2376,17 @@ class AdminAwardWinners(Templated):
         trophies = Trophy.by_award(award)
         Templated.__init__(self, award = award, trophies = trophies)
 
-class AdminUsage(Templated):
-    """The admin page for viewing usage stats"""
-    def __init__(self):
-        hcb = g.hardcache.backend
-
-        self.actions = {}
-        triples = set() # sorting key
-        daily_stats = {}
-
-        idses = hcb.ids_by_category("profile_count", limit=10000)
-        counts   = g.hardcache.get_multi(prefix="profile_count-", keys=idses)
-        elapseds = g.hardcache.get_multi(prefix="profile_elapsed-", keys=idses)
-
-        # The next three code paragraphs are for the case where we're
-        # rendering the current period and trying to decide what load class
-        # to use. For example, if today's number of hits equals yesterday's,
-        # and we're 23:59 into the day, that's totally normal. But if we're
-        # only 12 hours into the day, that's twice what we'd expect. So
-        # we're going to scale the current period by the percent of the way
-        # into the period that we are.
-        #
-        # If we're less than 5% of the way into the period, we skip this
-        # step. This both avoids Div0 errors and keeps us from extrapolating
-        # ridiculously from a tiny sample size.
-
-        now = c.start_time.astimezone(g.display_tz)
-        t_midnight = trunc_time(now, hours=24, mins=60)
-        t_hour = trunc_time(now, mins=60)
-        t_5min = trunc_time(now, mins=5)
-
-        offset_day  = (now - t_midnight).seconds / 86400.0
-        offset_hour = (now - t_hour).seconds     / 3600.0
-        offset_5min = (now - t_5min).seconds     / 300.0
-
-        this_day  = t_midnight.strftime("%Y/%m/%d_xx:xx")
-        this_hour =     t_hour.strftime("%Y/%m/%d_%H:xx")
-        this_5min =     t_5min.strftime("%Y/%m/%d_%H:%M")
-
-        for ids in idses:
-            time, action = ids.split("-")
-
-            # coltype strings are carefully chosen to sort alphabetically
-            # in the order that they do
-
-            if time.endswith("xx:xx"):
-                coltype = 'Day'
-                factor = 1.0
-                label = time[5:10] # MM/DD
-                if time == this_day and offset_day > 0.05:
-                    factor /= offset_day
-            elif time.endswith(":xx"):
-                coltype = 'Hour'
-                factor = 24.0
-                label = time[11:] # HH:xx
-                if time == this_hour and offset_hour > 0.05:
-                    factor /= offset_hour
-            else:
-                coltype = 'five-min'
-                factor = 288.0 # number of five-minute periods in a day
-                label = time[11:] # HH:MM
-                if time == this_5min and offset_5min > 0.05:
-                    factor /= offset_5min
-
-            count = counts.get(ids, None)
-            if count is None or count == 0:
-                log_text("usage count=None", "For %r, it's %r" % (ids, count), "error")
-                continue
-
-            # Elapsed in hardcache is in hundredths of a second.
-            # Multiply it by 100 so from this point forward, we're
-            # dealing with seconds -- as floats with two decimal
-            # places of precision. Similarly, round the average
-            # to two decimal places.
-            elapsed = elapseds.get(ids, 0) / 100.0
-            average = int(100.0 * elapsed / count) / 100.0
-
-            # Again, the "triple" tuples are a sorting key for the columns
-            triples.add( (coltype, time, label) )
-
-            if coltype == 'Day':
-                daily_stats.setdefault(action, []).append(
-                    (count, elapsed, average)
-                    )
-
-            self.actions.setdefault(action, {})
-            self.actions[action][label] = dict(count=count, elapsed=elapsed,
-                                               average=average,
-                                               factor=factor,
-                                               classes = {})
-
-        # Figure out what a typical day looks like. For each action,
-        # look at the daily stats and record the median.
-        for action in daily_stats.keys():
-            if len(daily_stats[action]) < 2:
-                # This is a new action. No point in guessing what normal
-                # load for it looks like.
-                continue
-            med = {}
-            med["count"]   = median([ x[0] for x in daily_stats[action] ])
-            med["elapsed"] = median([ x[1] for x in daily_stats[action] ])
-            med["average"] = median([ x[2] for x in daily_stats[action] ])
-
-            # For the purposes of load classes, round the baseline count up
-            # to 5000 times per day, the elapsed to 30 minutes per day, and
-            # the average to 0.10 seconds per request. This not only avoids
-            # division-by-zero problems but also means that if something
-            # went from taking 0.01 seconds per day to 0.08 seconds per day,
-            # we're not going to consider it an emergency.
-            med["count"]   = max(5000,   med["count"])
-            med["elapsed"] = max(1800.0, med["elapsed"])
-            med["average"] = max(0.10,  med["average"])
-
-#            print "Median count for %s is %r" % (action, med["count"])
-
-            for d in self.actions[action].values():
-                ice_cold = False
-                for category in ("elapsed", "count", "average"):
-                    if category == "average":
-                        scaled = d[category]
-                    else:
-                        scaled = d[category] * d["factor"]
-
-                    if category == "elapsed" and scaled < 5 * 60:
-                        # If we're spending less than five mins a day
-                        # on this operation, consider it ice cold regardless
-                        # of how much of an outlier it is
-                        ice_cold = True
-
-                    if ice_cold:
-                        d["classes"][category] = "load0"
-                        continue
-
-                    if med[category] <= 0:
-                        d["classes"][category] = "load9"
-                        continue
-
-                    ratio = scaled / med[category]
-                    if ratio > 5.0:
-                        d["classes"][category] = "load9"
-                    elif ratio > 3.0:
-                        d["classes"][category] = "load8"
-                    elif ratio > 2.0:
-                        d["classes"][category] = "load7"
-                    elif ratio > 1.5:
-                        d["classes"][category] = "load6"
-                    elif ratio > 1.1:
-                        d["classes"][category] = "load5"
-                    elif ratio > 0.9:
-                        d["classes"][category] = "load4"
-                    elif ratio > 0.75:
-                        d["classes"][category] = "load3"
-                    elif ratio > 0.5:
-                        d["classes"][category] = "load2"
-                    elif ratio > 0.10:
-                        d["classes"][category] = "load1"
-                    else:
-                        d["classes"][category] = "load0"
-
-        # Build a list called labels that gives the template a sorting
-        # order for the columns.
-        self.labels = []
-        # Keep track of how many times we've seen a granularity (i.e., coltype)
-        # so we can hide any that come after the third
-        coltype_counts = {}
-        # sort actions by whatever will end up as the first column
-        action_sorting_column = None
-        for coltype, time, label in sorted(triples, reverse=True):
-            if action_sorting_column is None:
-                action_sorting_column = label
-            coltype_counts.setdefault(coltype, 0)
-            coltype_counts[coltype] += 1
-            self.labels.append( (label, coltype_counts[coltype] > 3) )
-
-        self.action_order = sorted(self.actions.keys(), reverse=True,
-                key = lambda x:
-                      self.actions[x].get(action_sorting_column, {"elapsed":0})["elapsed"])
-
-        Templated.__init__(self)
-
 class Ads(Templated):
-    pass
+    def __init__(self):
+        Templated.__init__(self)
+        path = ""
+        if c.custom_dart_keyword:
+            path = "r/%s/%s" % (c.site.name, c.custom_dart_keyword)
+        elif not c.default_sr:
+            path = "r/%s/" % c.site.name
+        self.ad_url = g.ad_domain + "/ads/" + path
+        self.frame_id = "ad-frame"
+
 
 class Embed(Templated):
     """wrapper for embedding /help into reddit as if it were not on a separate wiki."""
@@ -2529,60 +2505,6 @@ class UserTableItem(Templated):
 
     def __repr__(self):
         return '<UserTableItem "%s">' % self.user.name
-
-class UserList(Templated):
-    """base class for generating a list of users"""    
-    form_title     = ''
-    table_title    = ''
-    type           = ''
-    container_name = ''
-    cells          = ('user', 'sendmessage', 'remove')
-    _class         = ""
-    destination    = "friend"
-    remove_action  = "unfriend"
-    editable_fn    = None
-
-    def __init__(self, editable=True, addable=None):
-        self.editable = editable
-        if addable is None:
-            addable = editable
-        self.addable = addable
-        Templated.__init__(self)
-
-    def user_row(self, user):
-        """Convenience method for constructing a UserTableItem
-        instance of the user with type, container_name, etc. of this
-        UserList instance"""
-        editable = self.editable
-
-        if self.editable_fn and not self.editable_fn(user):
-            editable = False
-
-        return UserTableItem(user, self.type, self.cells, self.container_name,
-                             editable, self.remove_action)
-
-    @property
-    def users(self, site = None):
-        """Generates a UserTableItem wrapped list of the Account
-        objects which should be present in this UserList."""
-        uids = self.user_ids()
-        if uids:
-            users = Account._byID(uids, True, return_dict = False) 
-            return [self.user_row(u) for u in users]
-        else:
-            return []
-
-    def user_ids(self):
-        """virtual method for fetching the list of ids of the Accounts
-        to be listing in this UserList instance"""
-        raise NotImplementedError
-
-    def can_remove_self(self):
-        return False
-
-    @property
-    def container_name(self):
-        return c.site._fullname
 
 class FlairPane(Templated):
     def __init__(self, num, after, reverse, name, user):
@@ -2835,6 +2757,64 @@ class FlairSelector(CachedTemplate):
         return templates, matching_template
 
 
+class UserList(Templated):
+    """base class for generating a list of users"""
+    form_title     = ''
+    table_title    = ''
+    table_headers  = None
+    type           = ''
+    container_name = ''
+    cells          = ('user', 'sendmessage', 'remove')
+    _class         = ""
+    destination    = "friend"
+    remove_action  = "unfriend"
+
+    def __init__(self, editable=True, addable=None):
+        self.editable = editable
+        if addable is None:
+            addable = editable
+        self.addable = addable
+        Templated.__init__(self)
+
+    def user_row(self, row_type, user, editable=True):
+        """Convenience method for constructing a UserTableItem
+        instance of the user with type, container_name, etc. of this
+        UserList instance"""
+        return UserTableItem(user, row_type, self.cells, self.container_name,
+                             editable, self.remove_action)
+
+    def _user_rows(self, row_type, uids, editable_fn=None):
+        """Generates a UserTableItem wrapped list of the Account
+        objects which should be present in this UserList."""
+
+        if uids:
+            users = Account._byID(uids, True, return_dict = False)
+            rows = []
+            for u in users:
+                if not u._deleted:
+                    editable = editable_fn(u) if editable_fn else self.editable
+                    rows.append(self.user_row(row_type, u, editable))
+            return rows
+        else:
+            return []
+
+    @property
+    def user_rows(self):
+        return self._user_rows(self.type, self.user_ids())
+
+    def user_ids(self):
+        """virtual method for fetching the list of ids of the Accounts
+        to be listing in this UserList instance"""
+        raise NotImplementedError
+
+    @property
+    def container_name(self):
+        return c.site._fullname
+
+    def executed_message(self, row_type):
+        return _("added")
+
+
 class FriendList(UserList):
     """Friend list on /pref/friends"""
     type = 'friend'
@@ -2859,13 +2839,13 @@ class FriendList(UserList):
     def user_ids(self):
         return c.user.friends
 
-    def user_row(self, user):
+    def user_row(self, row_type, user, editable=True):
         if not getattr(self, "friend_rels", None):
-            return UserList.user_row(self, user)
+            return UserList.user_row(self, row_type, user, editable)
         else:
             rel = self.friend_rels[user._id]
-            return UserTableItem(user, self.type, self.cells, self.container_name,
-                                 True, self.remove_action, rel)
+            return UserTableItem(user, row_type, self.cells, self.container_name,
+                                 editable, self.remove_action, rel)
 
     @property
     def container_name(self):
@@ -2915,29 +2895,49 @@ class ContributorList(UserList):
 class ModList(UserList):
     """Moderator list for a reddit."""
     type = 'moderator'
-    remove_self_action = _('leave')
+    invite_type = 'moderator_invite'
+    invite_action = 'accept_moderator_invite'
+    form_title = _('add moderator')
+    invite_form_title = _('invite moderator')
     remove_self_title = _('you are a moderator of this subreddit. %(action)s')
-    remove_self_confirm = _('stop being a moderator?')
-    remove_self_final = _('you are no longer a moderator')
-
-    @property
-    def form_title(self):
-        return _('add moderator')
 
     @property
     def table_title(self):
-        return _("moderators of %(reddit)s") % dict(reddit = c.site.name)
+        return _("moderators of /r/%(reddit)s") % {"reddit": c.site.name}
 
+    def executed_message(self, row_type):
+        if row_type == "moderator_invite":
+            return _("invited")
+        else:
+            return _("added")
+
+    @property
+    def can_force_add(self):
+        return c.user_is_admin
+
+    @property
     def can_remove_self(self):
         return c.user_is_loggedin and c.site.is_moderator(c.user)
 
-    def editable_fn(self, user):
+    @property
+    def has_invite(self):
+        return c.user_is_loggedin and c.site.is_moderator_invite(c.user)
+
+    def moderator_editable(self, user):
         if not c.user_is_loggedin:
             return False
         elif c.user_is_admin:
             return True
         else:
             return c.site.can_demod(c.user, user)
+
+    @property
+    def user_rows(self):
+        return self._user_rows(self.type, self.user_ids(), self.moderator_editable)
+
+    @property
+    def invited_user_rows(self):
+        return self._user_rows(self.invite_type, c.site.moderator_invite_ids())
 
     def user_ids(self):
         return c.site.moderators
@@ -3051,6 +3051,10 @@ class PromotePage(Reddit):
                     NamedButton('live_promos'),
                     NamedButton('graph')]
 
+        if c.user_is_sponsor:
+            buttons.append(NamedButton('admin_graph',
+                                       dest='/admin/graph'))
+
         menu  = NavMenu(buttons, base_path = '/promoted',
                         type='flatlist')
 
@@ -3063,8 +3067,14 @@ class PromotePage(Reddit):
         Reddit.__init__(self, title, nav_menus = nav_menus, *a, **kw)
 
 class PromoteLinkForm(Templated):
-    def __init__(self, sr = None, link = None, listing = '',
-                 timedeltatext = '', *a, **kw):
+    def __init__(self, sr=None, link=None, listing='',
+                 timedeltatext='', *a, **kw):
+        self.setup(sr, link, listing, timedeltatext, *a, **kw)
+        Templated.__init__(self, sr=sr, datefmt = datefmt,
+                           timedeltatext=timedeltatext, listing = listing,
+                           bids = self.bids, *a, **kw)
+
+    def setup(self, sr, link, listing, timedeltatext, *a, **kw):
         bids = []
         if c.user_is_sponsor and link:
             self.author = Account._byID(link.author_id)
@@ -3079,59 +3089,117 @@ class PromoteLinkForm(Templated):
 
         # min date is the day before the first possible start date.
         self.promote_date_today = now
-        mindate = (make_offset_date(now, g.min_promote_future,
-                                    business_days = True) -
-                   datetime.timedelta(1))
+        mindate = make_offset_date(now, g.min_promote_future,
+                                  business_days=True)
+        mindate -= datetime.timedelta(1)
 
         startdate = mindate + datetime.timedelta(1)
-        enddate   = startdate + datetime.timedelta(3)
+        enddate = startdate + datetime.timedelta(3)
 
         self.startdate = startdate.strftime("%m/%d/%Y")
-        self.enddate   = enddate  .strftime("%m/%d/%Y")
+        self.enddate = enddate.strftime("%m/%d/%Y")
 
-        self.mindate   = mindate  .strftime("%m/%d/%Y")
+        self.mindate = mindate.strftime("%m/%d/%Y")
 
         self.link = None
         if link:
             self.sr_searches = simplejson.dumps(popular_searches())
             self.subreddits = (Subreddit.submit_sr_names(c.user) or
                                Subreddit.submit_sr_names(None))
-            self.default_sr = self.subreddits[0] if self.subreddits \
-                              else g.default_sr
-            # have the promo code wrap the campaigns for rendering
-            self.link = promote.editable_add_props(link)
+            self.default_sr = (self.subreddits[0] if self.subreddits
+                               else g.default_sr)
+            self.link = promote.wrap_promoted(link)
+            campaigns = PromoCampaign._by_link(link._id)
+            self.campaigns = promote.get_renderable_campaigns(link, campaigns)
+            self.promotion_log = PromotionLog.get(link)
 
         if not c.user_is_sponsor:
             self.now = promote.promo_datetime_now().date()
-            start_date = promote.promo_datetime_now(offset = -14).date()
-            end_date = promote.promo_datetime_now(offset = 14).date()
+            start_date = promote.promo_datetime_now(offset=-14).date()
+            end_date = promote.promo_datetime_now(offset=14).date()
 
             self.promo_traffic = dict(promote.traffic_totals())
             self.market, self.promo_counter = \
                 Promote_Graph.get_market(None, start_date, end_date)
 
+        self.bids = bids
         self.min_daily_bid = 0 if c.user_is_admin else g.min_promote_bid
 
-        Templated.__init__(self, sr = sr, 
-                           datefmt = datefmt,
-                           timedeltatext = timedeltatext,
-                           listing = listing, bids = bids, 
-                           *a, **kw)
 
-class PromoteLinkFormOld(PromoteLinkForm):
-    def __init__(self, **kw):
-        PromoteLinkForm.__init__(self, **kw)
-        self.bid = g.min_promote_bid
-        campaign = {}
-        if self.link:
-            campaign = self.link.campaigns[0]
-            self.startdate = campaign.start_date
-            self.enddate = campaign.end_date
+class PromoteLinkFormCpm(PromoteLinkForm):
+    def __init__(self, sr=None, link=None, listing='',
+                 timedeltatext='', *a, **kw):
+        self.setup(sr, link, listing, timedeltatext, *a, **kw)
+        
+        if not c.user_is_sponsor:
+            self.now = promote.promo_datetime_now().date()
+            start_date = self.now
+            end_date = self.now + datetime.timedelta(60) # two months
+            self.inventory = promote.get_available_impressions(sr, start_date, end_date)
 
-        self.bid = campaign.get("bid", g.min_promote_bid)
-        self.freebie = campaign.get("status",{}).get("free", False)
-        self.complete = campaign.get("status",{}).get("complete", False)
-        self.paid = campaign.get("status",{}).get("paid", False)
+        Templated.__init__(self, sr=sr, datefmt = datefmt,
+                           timedeltatext=timedeltatext, listing = listing,
+                           bids = self.bids, *a, **kw)
+
+
+class PromoAdminTool(Reddit):
+    def __init__(self, query_type=None, launchdate=None, start=None, end=None, *a, **kw):
+        self.query_type = query_type
+        self.launch = launchdate if launchdate else datetime.datetime.now()
+        self.start = start if start else datetime.datetime.now()
+        self.end = end if end else self.start + datetime.timedelta(1)
+        # started_on shows promos that were scheduled to launch on start date
+        if query_type == "started_on" and self.start:
+            all_promos = self.get_promo_info(self.start, 
+                    self.start + datetime.timedelta(1)) # exactly one day
+            promos = {}
+            start_date_string = self.start.strftime("%Y/%m/%d")
+            for camp_id, data in all_promos.iteritems():
+                if start_date_string == data["campaign_start"]:
+                    promos[camp_id] = data
+        # between shows any promo that was scheduled on at least one day in
+        # the range [start, end)
+        elif query_type == "between" and self.start and self.end:
+            promos = self.get_promo_info(self.start, self.end)
+        else:
+            promos = {}
+      
+        for camp_id, promo in promos.iteritems():
+            link_id36 = promo["link_fullname"].split('_')[1]
+            promo["campaign_id"] = camp_id
+            promo["edit_link"] = promote.promo_edit_url(None, id36=link_id36)
+
+        self.promos = sorted(promos.values(), 
+                             key=lambda x: (x['username'], x['campaign_start']))
+
+        Reddit.__init__(self, title="Promo Admin Tool", show_sidebar=False)
+
+
+    def get_promo_info(self, start_date, end_date):
+        promo_info = {}
+        scheduled = Promote_Graph.get_current_promos(start_date, 
+                            end_date + datetime.timedelta(1))
+        campaign_ids = [x[1] for x in scheduled]
+        campaigns = PromoCampaign._byID(campaign_ids, data=True, return_dict=True)
+        account_ids = [pc.owner_id for pc in campaigns.itervalues()]
+        accounts = Account._byID(account_ids, data=True, return_dict=True)
+        for link, campaign_id, scheduled_start, scheduled_end in scheduled:
+            campaign = campaigns[campaign_id]
+            days = (campaign.end_date - campaign.start_date).days
+            bid_per_day = float(campaign.bid) / days
+            account = accounts[campaign.owner_id]
+            promo_info[campaign._id] = { 
+                'username': account.name,
+                'user_email': account.email,
+                'link_title': link.title,
+                'link_fullname': link._fullname,
+                'campaign_start': campaign.start_date.strftime("%Y/%m/%d"),
+                'campaign_end': campaign.end_date.strftime("%Y/%m/%d"),
+                'bid_per_day': bid_per_day,
+            }            
+        return promo_info 
+
+
 
 class Roadblocks(Templated):
     def __init__(self):
@@ -3315,12 +3383,11 @@ class RedditAds(Templated):
         Templated.__init__(self, **kw)
 
 class PaymentForm(Templated):
-    def __init__(self, link, indx, **kw):
+    def __init__(self, link, campaign, **kw):
         self.countries = [pycountry.countries.get(name=n) 
                           for n in g.allowed_pay_countries]
-        self.link = promote.editable_add_props(link)
-        self.campaign = self.link.campaigns[indx]
-        self.indx = indx
+        self.link = promote.wrap_promoted(link)
+        self.campaign = promote.get_renderable_campaigns(link, campaign)
         Templated.__init__(self, **kw)
 
 class Promotion_Summary(Templated):
@@ -3398,7 +3465,7 @@ class Promote_Graph(Templated):
     def get_market(cls, user_id, start_date, end_date):
         market = {}
         promo_counter = {}
-        def callback(link, bid, bid_day, starti, endi, indx):
+        def callback(link, bid_day, starti, endi, dummy):
             for i in xrange(starti, endi):
                 if user_id is None or link.author_id == user_id:
                     if (not promote.is_unpaid(link) and 
@@ -3411,18 +3478,19 @@ class Promote_Graph(Templated):
     @classmethod
     def promo_iter(cls, start_date, end_date, callback):
         size = (end_date - start_date).days
-        for link, indx, s, e in cls.get_current_promos(start_date, end_date):
-            if indx in link.campaigns:
-                sdate, edate, bid, sr, trans_id = link.campaigns[indx]
-                if isinstance(sdate, datetime.datetime):
-                    sdate = sdate.date()
-                if isinstance(edate, datetime.datetime):
-                    edate = edate.date()
+        current_promos = cls.get_current_promos(start_date, end_date)
+        campaign_ids = [camp_id for link, camp_id, s, e in current_promos]
+        campaigns = PromoCampaign._byID(campaign_ids, data=True)
+        for link, campaign_id, s, e in current_promos:
+            if campaign_id in campaigns:
+                campaign = campaigns[campaign_id]
+                sdate = campaign.start_date.date()
+                edate = campaign.end_date.date()
                 starti = max((sdate - start_date).days, 0)
-                endi   = min((edate - start_date).days, size)
-                bid_day = bid / max((edate - sdate).days, 1)
-                callback(link, bid, bid_day, starti, endi, indx)
-
+                endi = min((edate - start_date).days, size)
+                bid_day = campaign.bid / max((edate - sdate).days, 1)
+                callback(link, bid_day, starti, endi, campaign)
+        
     @classmethod
     def get_current_promos(cls, start_date, end_date):
         # grab promoted links
@@ -3437,13 +3505,14 @@ class Promote_Graph(Templated):
         links = dict((l._fullname, l) for l in links.things
                      if promote.is_accepted(l) or promote.is_unapproved(l))
         # filter promos accordingly
-        promos = [(links[thing_name], indx, s, e) 
-                  for thing_name, indx, s, e in promos
+        promos = [(links[thing_name], campaign_id, s, e) 
+                  for thing_name, campaign_id, s, e in promos
                   if links.has_key(thing_name)]
 
         return promos
 
-    def __init__(self):
+    def __init__(self, admin_view=False):
+        self.admin_view = admin_view and c.user_is_sponsor
         self.now = promote.promo_datetime_now()
 
         start_date = promote.promo_datetime_now(offset = -7).date()
@@ -3455,16 +3524,16 @@ class Promote_Graph(Templated):
         # these will be cached queries
         market, promo_counter = self.get_market(None, start_date, end_date)
         my_market = market
-        if not c.user_is_sponsor:
+        if not self.admin_view:
             my_market = self.get_market(c.user._id, start_date, end_date)[0]
 
         # determine the range of each link
         promote_blocks = []
-        def block_maker(link, bid, bid_day, starti, endi, indx):
-            if ((c.user_is_sponsor or link.author_id == c.user._id)
+        def block_maker(link, bid_day, starti, endi, campaign):
+            if ((self.admin_view or link.author_id == c.user._id)
                 and not promote.is_rejected(link)
                 and not promote.is_unpaid(link)):
-                promote_blocks.append( (link, bid, starti, endi, indx) )
+                promote_blocks.append((link, starti, endi, campaign))
         self.promo_iter(start_date, end_date, block_maker)
 
         # now sort the promoted_blocks into the most contiguous chuncks we can
@@ -3558,8 +3627,7 @@ class Dart_Ad(CachedTemplate):
     def __init__(self, dartsite, tag, custom_keyword=None):
         tag = tag or "homepage"
         keyword = custom_keyword or tag
-        tracker_url = AdframeInfo.gen_url(fullname = "dart_" + tag,
-                                          ip = request.ip)
+        tracker_url = tracking.get_impression_pixel_url("dart_" + tag)
         Templated.__init__(self, tag = tag, dartsite = dartsite,
                            tracker_url = tracker_url, keyword=keyword)
 
@@ -3577,7 +3645,20 @@ class HouseAd(CachedTemplate):
         res = CachedTemplate.render(self, *a, **kw)
         return responsive(res, False)
 
-def render_ad(reddit_name=None, codename=None, keyword=None):
+
+def render_ad_by_codename(codename):
+    if codename == "DART":
+        return Dart_Ad("reddit.dart", g.default_sr).render()
+
+    try:
+        ad = Ad._by_codename(codename)
+    except NotFound:
+        abort(404)
+    attrs = ad.important_attrs()
+    return HouseAd(**attrs).render()
+
+
+def render_ad(reddit_name=None, keyword=None):
     if not reddit_name:
         reddit_name = g.default_sr
         if g.live_config["frontpage_dart"]:
@@ -3596,50 +3677,26 @@ def render_ad(reddit_name=None, codename=None, keyword=None):
     if keyword:
         return Dart_Ad(dartsite, reddit_name, keyword).render()
 
-    if codename:
-        if codename == "DART":
-            return Dart_Ad(dartsite, reddit_name).render()
-        else:
-            try:
-                ad = Ad._by_codename(codename)
-            except NotFound:
-                abort(404)
-            attrs = ad.important_attrs()
-            return HouseAd(**attrs).render()
-
     ads = {}
 
     for adsr in AdSR.by_sr_merged(sr):
         ad = adsr._thing1
         ads[ad.codename] = (ad, adsr.weight)
 
-    total_weight = sum(t[1] for t in ads.values())
+    try:
+        codename = weighted_lottery({k: v[1] for k, v in ads.iteritems()})
+    except ValueError, ex:
+        log_text(
+            "no winner",
+            "No winner found for /r/%s, error=%s" % (reddit_name, ex.message),
+            "error")
+        codename = "DART"
 
-    if total_weight == 0:
-        log_text("no ads", "No ads found for %s" % reddit_name, "error")
-        return ""
-
-    lotto = random.randint(0, total_weight - 1)
-    winner = None
-    for t in ads.values():
-        lotto -= t[1]
-        if lotto <= 0:
-            winner = t[0]
-
-            if winner.codename == "DART":
-                return Dart_Ad(dartsite, reddit_name).render()
-            else:
-                attrs = winner.important_attrs()
-                return HouseAd(**attrs).render()
-
-    # No winner?
-
-    log_text("no winner",
-             "No winner found for /r/%s, total_weight=%d" %
-             (reddit_name, total_weight),
-             "error")
-
-    return Dart_Ad(dartsite, reddit_name).render()
+    if codename == "DART":
+        return Dart_Ad(dartsite, reddit_name).render()
+    else:
+        attrs = ads[codename][0].important_attrs()
+        return HouseAd(**attrs).render()
 
 class TryCompact(Reddit):
     def __init__(self, dest, **kw):
@@ -3664,9 +3721,7 @@ class AccountActivityPage(BoringPage):
 
 class UserIPHistory(Templated):
     def __init__(self):
-        from r2.controllers.oauth2 import scope_info
-        self.my_apps = [(app, [scope_info[scope] for scope in scopes])
-                        for app, scopes in OAuth2Client._by_user(c.user)]
+        self.my_apps = OAuth2Client._by_user(c.user)
         self.ips = ips_by_account_id(c.user._id)
         super(UserIPHistory, self).__init__()
 
@@ -3696,3 +3751,22 @@ class InterestBar(Templated):
     def __init__(self, has_subscribed):
         self.has_subscribed = has_subscribed
         Templated.__init__(self)
+
+class GoldInfoPage(BoringPage):
+    def __init__(self, *args, **kwargs):
+        self.prices = {
+            "gold_month_price": g.gold_month_price,
+            "gold_year_price": g.gold_year_price,
+        }
+        BoringPage.__init__(self, *args, **kwargs)
+
+
+class Goldvertisement(Templated):
+    def __init__(self):
+        Templated.__init__(self)
+        if not c.user.gold:
+            blurbs = g.live_config["goldvertisement_blurbs"]
+        else:
+            blurbs = g.live_config["goldvertisement_has_gold_blurbs"]
+        self.blurb = random.choice(blurbs)
+

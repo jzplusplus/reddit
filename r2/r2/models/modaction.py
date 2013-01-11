@@ -20,6 +20,8 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+from datetime import timedelta
+
 from r2.lib.db import tdb_cassandra
 from r2.lib.utils import tup
 from r2.models import Account, Subreddit, Link, Comment, Printable
@@ -49,6 +51,7 @@ class ModAction(tdb_cassandra.UuidThing, Printable):
 
     actions = ('banuser', 'unbanuser', 'removelink', 'approvelink', 
                'removecomment', 'approvecomment', 'addmoderator',
+               'invitemoderator', 'uninvitemoderator', 'acceptmoderatorinvite',
                'removemoderator', 'addcontributor', 'removecontributor',
                'editsettings', 'editflair', 'distinguish', 'marknsfw', 
                'wikibanned', 'wikicontributor', 'wikiunbanned',
@@ -62,6 +65,9 @@ class ModAction(tdb_cassandra.UuidThing, Printable):
              'approvecomment': _('approve comment'),
              'addmoderator': _('add moderator'),
              'removemoderator': _('remove moderator'),
+             'invitemoderator': _('invite moderator'),
+             'uninvitemoderator': _('uninvite moderator'),
+             'acceptmoderatorinvite': _('accept moderator invite'),
              'addcontributor': _('add contributor'),
              'removecontributor': _('remove contributor'),
              'editsettings': _('edit settings'),
@@ -73,7 +79,7 @@ class ModAction(tdb_cassandra.UuidThing, Printable):
              'wikicontributor': _('add wiki contributor'),
              'removewikicontributor': _('remove wiki contributor'),
              'wikirevise': _('wiki revise page'),
-             'wikipermlevel': _('wiki page permlevel')}
+             'wikipermlevel': _('wiki page permissions')}
 
     _text = {'banuser': _('banned'),
              'wikibanned': _('wiki banned'),
@@ -84,9 +90,12 @@ class ModAction(tdb_cassandra.UuidThing, Printable):
              'removelink': _('removed'),
              'approvelink': _('approved'),
              'removecomment': _('removed'),
-             'approvecomment': _('approved'),                    
+             'approvecomment': _('approved'),
              'addmoderator': _('added moderator'),
              'removemoderator': _('removed moderator'),
+             'invitemoderator': _('invited moderator'),
+             'uninvitemoderator': _('uninvited moderator'),
+             'acceptmoderatorinvite': _('accepted moderator invitation'),
              'addcontributor': _('added approved contributor'),
              'removecontributor': _('removed approved contributor'),
              'editsettings': _('edited settings'),
@@ -336,7 +345,7 @@ class ModActionBySR(tdb_cassandra.View):
     _connection_pool = 'main'
     _compare_with = TIME_UUID_TYPE
     _view_of = ModAction
-    _ttl = 60*60*24*30*3  # 3 month ttl
+    _ttl = timedelta(days=90)
     _read_consistency_level = tdb_cassandra.CL.ONE
 
     @classmethod
@@ -348,7 +357,7 @@ class ModActionBySRMod(tdb_cassandra.View):
     _connection_pool = 'main'
     _compare_with = TIME_UUID_TYPE
     _view_of = ModAction
-    _ttl = 60*60*24*30*3  # 3 month ttl
+    _ttl = timedelta(days=90)
     _read_consistency_level = tdb_cassandra.CL.ONE
 
     @classmethod
@@ -360,7 +369,7 @@ class ModActionBySRAction(tdb_cassandra.View):
     _connection_pool = 'main'
     _compare_with = TIME_UUID_TYPE
     _view_of = ModAction
-    _ttl = 60*60*24*30*3  # 3 month ttl
+    _ttl = timedelta(days=90)
     _read_consistency_level = tdb_cassandra.CL.ONE
 
     @classmethod

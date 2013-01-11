@@ -49,6 +49,7 @@ def load_controllers():
     from listingcontroller import RandomrisingController
     from listingcontroller import UserController
     from listingcontroller import CommentsController
+    from listingcontroller import GildedController
 
     from listingcontroller import MyredditsController
 
@@ -64,7 +65,6 @@ def load_controllers():
     from toolbar import ToolbarController
     from awards import AwardsController
     from ads import AdsController
-    from usage import UsageController
     from errorlog import ErrorlogController
     from promotecontroller import PromoteController
     from mediaembed import MediaembedController

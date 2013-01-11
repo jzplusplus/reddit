@@ -22,7 +22,6 @@
 
 from oauth2 import OAuth2ResourceController, require_oauth2_scope
 from reddit_base import RedditController, base_listing, organic_pos
-from validator import *
 
 from r2.models import *
 from r2.models.query_cache import CachedQuery, MergedCachedQuery
@@ -41,13 +40,13 @@ from r2.lib import organic
 import r2.lib.search as search
 from r2.lib.utils import iters, check_cheating, timeago
 from r2.lib import sup
-from r2.lib.promote import randomized_promotion_list, get_promote_srid
+from r2.lib.promote import randomized_promotion_list
+from r2.lib.validator import *
 import socket
 
 from api_docs import api_doc, api_section
 
 from pylons.i18n import _
-from pylons import Response
 from pylons.controllers.util import redirect_to
 
 import random
@@ -324,16 +323,22 @@ class HotController(FixListing, ListingController):
                                  max_num = self.listing_obj.max_num,
                                  max_score = self.listing_obj.max_score).listing()
 
-            has_subscribed = c.user.has_subscribed
-            promo_visible = promote.is_promo(s.lookup[vislink])
-            if not promo_visible:
-                prob = g.live_config['spotlight_interest_sub_p'
-                                     if has_subscribed else
-                                     'spotlight_interest_nosub_p']
-                if random.random() < prob:
-                    bar = InterestBar(has_subscribed)
-                    s.spotlight_items.insert(pos, bar)
-                    s.visible_item = bar
+            if vislink not in s.lookup:
+                # FIXME: spotlight vislink is missing from the items returned
+                # by the builder.
+                # This may result in an empty spotlight box.
+                pass
+            else:
+                has_subscribed = c.user.has_subscribed
+                promo_visible = promote.is_promo(s.lookup[vislink])
+                if not promo_visible:
+                    prob = g.live_config['spotlight_interest_sub_p'
+                                         if has_subscribed else
+                                         'spotlight_interest_nosub_p']
+                    if random.random() < prob:
+                        bar = InterestBar(has_subscribed)
+                        s.spotlight_items.insert(pos, bar)
+                        s.visible_item = bar
 
             if len(s.things) > 0:
                 # only pass through a listing if the links made it
@@ -546,6 +551,20 @@ class UserController(ListingController):
             res.append(ProfileSortMenu(default = self.sort))
             if self.sort not in ("hot", "new"):
                 res.append(TimeMenu(default = self.time))
+        if self.where == 'saved' and c.user.gold:
+            srnames = LinkSavesBySubreddit.get_saved_subreddits(self.vuser)
+            srnames += CommentSavesBySubreddit.get_saved_subreddits(self.vuser)
+            srnames = sorted(list(set(srnames)))
+            if len(srnames) > 1:
+                sr_buttons = [NavButton(_('all'), None, opt='sr',
+                                        css_class='primary')]
+                for srname in srnames:
+                    sr_buttons.append(NavButton(srname, srname, opt='sr'))
+                base_path = request.path
+                sr_menu = NavMenu(sr_buttons, base_path=base_path, 
+                                  title=_('filter by subreddit'),
+                                  type='lightdrop')
+                res.append(sr_menu)
         return res
 
     def title(self):
@@ -615,10 +634,18 @@ class UserController(ListingController):
             q = queries.get_hidden(self.vuser)
 
         elif self.where == 'saved':
-            q = queries.get_saved(self.vuser)
+            srname = request.get.get('sr')
+            if srname and c.user.gold:
+                try:
+                    sr_id = Subreddit._by_name(srname)._id
+                except NotFound:
+                    sr_id = None
+            else:
+                sr_id = None
+            q = queries.get_saved(self.vuser, sr_id)
 
         elif c.user_is_sponsor and self.where == 'promoted':
-            q = promote.get_all_links(self.vuser._id)
+            q = queries.get_promoted_links(self.vuser._id)
 
         if q is None:
             return self.abort404()
@@ -628,8 +655,8 @@ class UserController(ListingController):
     @validate(vuser = VExistingUname('username'),
               sort = VMenu('sort', ProfileSortMenu, remember = False),
               time = VMenu('t', TimeMenu, remember = False))
-    @listing_api_doc(section=api_section.users, uri='/{username}/{where}',
-                     uri_variants=['/{username}/' + where for where in [
+    @listing_api_doc(section=api_section.users, uri='/user/{username}/{where}',
+                     uri_variants=['/user/{username}/' + where for where in [
                                        'overview', 'submitted', 'commented',
                                        'liked', 'disliked', 'hidden', 'saved']])
     def GET_listing(self, where, vuser, sort, time, **env):
@@ -671,7 +698,8 @@ class UserController(ListingController):
         return ListingController.GET_listing(self, **env)
 
     @validate(vuser = VExistingUname('username'))
-    @api_doc(section=api_section.users, uri='/{username}/about', extensions=['json'])
+    @api_doc(section=api_section.users, uri='/user/{username}/about',
+             extensions=['json'])
     def GET_about(self, vuser):
         """Return information about the user, including karma and gold status."""
         if not is_api() or not vuser:
@@ -691,13 +719,17 @@ class UserController(ListingController):
             dest += "?" + query_string
         return redirect_to(dest)
 
-class MessageController(ListingController):
+class MessageController(ListingController, OAuth2ResourceController):
     show_nums = False
     render_cls = MessagePage
     allow_stylesheets = False
     # note: this intentionally replaces the listing-page class which doesn't
     # conceptually fit for styling these pages.
     extra_page_classes = ['messages-page']
+
+    def pre(self):
+        self.check_for_bearer_token()
+        ListingController.pre(self)
 
     @property
     def show_sidebar(self):
@@ -847,6 +879,7 @@ class MessageController(ListingController):
 
         return q
 
+    @require_oauth2_scope("privatemessages")
     @validate(VUser(),
               message = VMessageID('mid'),
               mark = VOneOf('mark',('true','false')))
@@ -895,6 +928,12 @@ class RedditsController(ListingController):
     def title(self):
         return _('reddits')
 
+    def keep_fn(self):
+        base_keep_fn = ListingController.keep_fn(self)
+        def keep(item):
+            return base_keep_fn(item) and (c.over18 or not item.over_18)
+        return keep
+
     def query(self):
         if self.where == 'banned' and c.user_is_admin:
             reddits = Subreddit._query(Subreddit.c._spam == True,
@@ -922,9 +961,6 @@ class RedditsController(ListingController):
                 # don't try to render special subreddits (like promos)
                 reddits._filter(Subreddit.c.author_id != -1)
 
-            if not c.over18:
-                reddits._filter(Subreddit.c.over_18 == False)
-
         if self.where == 'popular':
             self.render_params = {"show_interestbar": True}
 
@@ -941,8 +977,8 @@ class MyredditsController(ListingController, OAuth2ResourceController):
     render_cls = MySubredditsPage
 
     def pre(self):
-        ListingController.pre(self)
         self.check_for_bearer_token()
+        ListingController.pre(self)
 
     @property
     def menus(self):
@@ -993,7 +1029,7 @@ class MyredditsController(ListingController, OAuth2ResourceController):
 
         return ListingController.build_listing(self, after=after, **kwargs)
 
-    @require_oauth2_scope("myreddits")
+    @require_oauth2_scope("mysubreddits")
     @validate(VUser())
     @listing_api_doc(section=api_section.subreddits,
                      uri='/reddits/mine/{where}',
@@ -1012,3 +1048,13 @@ class CommentsController(ListingController):
         c.profilepage = True
         return ListingController.GET_listing(self, **env)
 
+
+class GildedController(ListingController):
+    title_text = _("gilded comments")
+
+    def query(self):
+        return queries.get_gilded_comments()
+
+    def GET_listing(self, **env):
+        c.profilepage = True
+        return ListingController.GET_listing(self, **env)

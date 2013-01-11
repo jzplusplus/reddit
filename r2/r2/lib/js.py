@@ -235,7 +235,8 @@ class LocalizedModule(Module):
         if g.uncompressedJS:
             return embed + StringsSource().use()
         else:
-            url = LocalizedModule.languagize_path(self.name, get_lang()[0])
+            langs = get_lang() or [g.lang]
+            url = LocalizedModule.languagize_path(self.name, langs[0])
             return script_tag.format(src=static(url))
 
     @property
@@ -285,6 +286,7 @@ module["reddit"] = LocalizedModule("reddit.js",
     "wiki.js",
     "reddit.js",
     "apps.js",
+    "gold.js",
 )
 
 module["mobile"] = LocalizedModule("mobile.js",
@@ -323,6 +325,16 @@ module["traffic"] = LocalizedModule("traffic.js",
 module["qrcode"] = Module("qrcode.js",
     "lib/jquery.qrcode.min.js",
     "qrcode.js",
+)
+
+module["highlight"] = Module("highlight.js",
+    "lib/highlight.pack.js",
+    "highlight.js",
+)
+
+module["less"] = Module('less.js',
+    'lib/less-1.3.0.min.js',
+    should_compile=False,
 )
 
 def use(*names):

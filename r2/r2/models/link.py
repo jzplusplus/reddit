@@ -20,13 +20,12 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
-from r2.lib.db.thing import Thing, Relation, NotFound, MultiRelation, \
-     CreationError
+from r2.lib.db.thing import (
+    Thing, Relation, NotFound, MultiRelation, CreationError)
 from r2.lib.db.operators import desc
 from r2.lib.utils import base_url, tup, domain, title_to_url, UrlParser
-from r2.lib.utils.trial_utils import trial_info
 from account import Account, DeletedUser
-from subreddit import Subreddit
+from subreddit import Subreddit, DomainSR
 from printable import Printable
 from r2.config import cache, extensions
 from r2.lib.memoize import memoize
@@ -36,45 +35,54 @@ from r2.lib.log import log_text
 from mako.filters import url_escape
 from r2.lib.strings import strings, Score
 from r2.lib.db import tdb_cassandra
+from r2.lib.db.tdb_cassandra import NotFoundException, view_of
 from r2.models.subreddit import MultiReddit
+from r2.models.query_cache import CachedQueryMutator
+from r2.models.promo import PROMOTE_STATUS, get_promote_srid
 
 from pylons import c, g, request
 from pylons.i18n import ungettext, _
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import md5
+from pycassa.util import convert_uuid_to_time
 
 import random, re
+import json
+import uuid
 
 class LinkExists(Exception): pass
 
 # defining types
 class Link(Thing, Printable):
-    _data_int_props = Thing._data_int_props + ('num_comments', 'reported')
-    _defaults = dict(is_self = False,
-                     over_18 = False,
-                     nsfw_str = False,
-                     reported = 0, num_comments = 0,
-                     moderator_banned = False,
-                     banned_before_moderator = False,
-                     media_object = None,
-                     promoted = None,
-                     pending = False,
-                     disable_comments = False,
-                     selftext = '',
-                     noselfreply = False,
-                     ip = '0.0.0.0',
-                     flair_text = None,
-                     flair_css_class = None)
+    _data_int_props = Thing._data_int_props + (
+        'num_comments', 'reported', 'comment_tree_id')
+    _defaults = dict(is_self=False,
+                     over_18=False,
+                     nsfw_str=False,
+                     reported=0, num_comments=0,
+                     moderator_banned=False,
+                     banned_before_moderator=False,
+                     media_object=None,
+                     promoted=None,
+                     pending=False,
+                     disable_comments=False,
+                     selftext='',
+                     noselfreply=False,
+                     ip='0.0.0.0',
+                     flair_text=None,
+                     flair_css_class=None,
+                     comment_tree_version=1,
+                     comment_tree_id=0)
     _essentials = ('sr_id', 'author_id')
     _nsfw = re.compile(r"\bnsfw\b", re.I)
 
     def __init__(self, *a, **kw):
         Thing.__init__(self, *a, **kw)
-    
+
     @property
     def has_thumbnail(self):
         return self._t.get('has_thumbnail', hasattr(self, 'thumbnail_url'))
-    
+
     @classmethod
     def _by_url(cls, url, sr):
         from subreddit import FakeSubreddit
@@ -90,7 +98,7 @@ class Link(Thing, Printable):
 
         link_id36s = lbu._values()
 
-        links = Link._byID36(link_id36s, data = True, return_dict = False)
+        links = Link._byID36(link_id36s, data=True, return_dict=False)
         links = [l for l in links if not l._deleted]
 
         if links and sr:
@@ -112,25 +120,39 @@ class Link(Thing, Printable):
     def already_submitted_link(self):
         return self.make_permalink_slow() + '?already_submitted=true'
 
-    def resubmit_link(self, sr_url = False):
-        submit_url  = self.subreddit_slow.path if sr_url else '/'
+    def resubmit_link(self, sr_url=False):
+        submit_url = self.subreddit_slow.path if sr_url else '/'
         submit_url += 'submit?resubmit=true&url=' + url_escape(self.url)
         return submit_url
+
+    @classmethod
+    def _choose_comment_tree_version(cls):
+        try:
+            weights = g.live_config['comment_tree_version_weights']
+        except KeyError:
+            return cls._defaults['comment_tree_version']
+        try:
+            return int(utils.weighted_lottery(weights))
+        except ValueError, ex:
+            g.log.error("error choosing comment tree version: %s", ex.message)
+            return cls._defaults['comment_tree_version']
 
     @classmethod
     def _submit(cls, title, url, author, sr, ip, spam=False):
         from r2.models import admintools
 
-        l = cls(_ups = 1,
-                title = title,
-                url = url,
-                _spam = spam,
-                author_id = author._id,
-                sr_id = sr._id,
-                lang = sr.lang,
-                ip = ip)
+        l = cls(_ups=1,
+                title=title,
+                url=url,
+                _spam=spam,
+                author_id=author._id,
+                sr_id=sr._id,
+                lang=sr.lang,
+                ip=ip,
+                comment_tree_version=cls._choose_comment_tree_version())
         l._commit()
         l.set_url_cache()
+        LinksByAccount.add_link(author, l)
         if author._spam:
             g.stats.simple_event('spam.autoremove.link')
             admintools.spam(l, banner='banned user')
@@ -138,8 +160,8 @@ class Link(Thing, Printable):
 
     @classmethod
     def _somethinged(cls, rel, user, link, name):
-        return rel._fast_query(tup(user), tup(link), name = name,
-                               thing_data=True, timestamp_optimize = True)
+        return rel._fast_query(tup(user), tup(link), name=name,
+                               thing_data=True, timestamp_optimize=True)
 
     def _something(self, rel, user, somethinged, name):
         try:
@@ -161,13 +183,11 @@ class Link(Thing, Printable):
         return cls._somethinged(SaveHide, user, link, 'save')
 
     def _save(self, user):
-        # dual-write CassandraSaves
-        CassandraSave._save(user, self)
+        LinkSavesByAccount._save(user, self)
         return self._something(SaveHide, user, self._saved, 'save')
 
     def _unsave(self, user):
-        # dual-write CassandraSaves
-        CassandraSave._unsave(user, self)
+        LinkSavesByAccount._unsave(user, self)
         return self._unsomething(user, self._saved, 'save')
 
     @classmethod
@@ -182,11 +202,11 @@ class Link(Thing, Printable):
         return cls._somethinged(SaveHide, user, link, 'hide')
 
     def _hide(self, user):
-        CassandraHide._hide(user, self)
+        LinkHidesByAccount._hide(user, self)
         return self._something(SaveHide, user, self._hidden, 'hide')
 
     def _unhide(self, user):
-        CassandraHide._unhide(user, self)
+        LinkHidesByAccount._unhide(user, self)
         return self._unsomething(user, self._hidden, 'hide')
 
     def link_domain(self):
@@ -198,7 +218,8 @@ class Link(Thing, Printable):
     def keep_item(self, wrapped):
         user = c.user if c.user_is_loggedin else None
 
-        if not c.user_is_admin:
+        if not (c.user_is_admin or (isinstance(c.site, DomainSR) and
+                                    wrapped.subreddit.is_moderator(user))):
             if self._spam and (not user or
                                (user and self.author_id != user._id)):
                 return False
@@ -235,7 +256,7 @@ class Link(Thing, Printable):
 
             if is_nsfw or is_from_nsfw_sr:
                 return False
-                
+
         return True
 
     # none of these things will change over a link's lifetime
@@ -269,26 +290,26 @@ class Link(Thing, Printable):
 
         return s
 
-    def make_permalink(self, sr, force_domain = False):
+    def make_permalink(self, sr, force_domain=False):
         from r2.lib.template_helpers import get_domain
         p = "comments/%s/%s/" % (self._id36, title_to_url(self.title))
         # promoted links belong to a separate subreddit and shouldn't
         # include that in the path
         if self.promoted is not None:
             if force_domain:
-                res = "http://%s/%s" % (get_domain(cname = False,
-                                                   subreddit = False), p)
+                res = "http://%s/%s" % (get_domain(cname=False,
+                                                   subreddit=False), p)
             else:
                 res = "/%s" % p
         elif not c.cname and not force_domain:
             res = "/r/%s/%s" % (sr.name, p)
         elif sr != c.site or force_domain:
             if(c.cname and sr == c.site):
-                res = "http://%s/%s" % (get_domain(cname = True,
-                                                    subreddit = False),p)
+                res = "http://%s/%s" % (get_domain(cname=True,
+                                                    subreddit=False), p)
             else:
-                res = "http://%s/r/%s/%s" % (get_domain(cname = False,
-                                                    subreddit = False),sr.name,p)
+                res = "http://%s/r/%s/%s" % (get_domain(cname=False,
+                                                    subreddit=False), sr.name, p)
         else:
             res = "/%s" % p
 
@@ -298,9 +319,9 @@ class Link(Thing, Printable):
 
         return res
 
-    def make_permalink_slow(self, force_domain = False):
+    def make_permalink_slow(self, force_domain=False):
         return self.make_permalink(self.subreddit_slow,
-                                   force_domain = force_domain)
+                                   force_domain=force_domain)
 
     @staticmethod
     def _should_expunge_selftext(link):
@@ -316,7 +337,7 @@ class Link(Thing, Printable):
         if link.can_ban:
             return False
         return True
-    
+
     @classmethod
     def add_props(cls, user, wrapped):
         from r2.lib.pages import make_link_child
@@ -339,8 +360,8 @@ class Link(Thing, Printable):
 
         if user_is_loggedin:
             try:
-                saved = CassandraSave._fast_query(user, wrapped)
-                hidden = CassandraHide._fast_query(user, wrapped)
+                saved = LinkSavesByAccount.fast_query(user, wrapped)
+                hidden = LinkHidesByAccount.fast_query(user, wrapped)
             except tdb_cassandra.TRANSIENT_EXCEPTIONS as e:
                 g.log.warning("Cassandra save/hide lookup failed: %r", e)
                 saved = hidden = {}
@@ -348,8 +369,6 @@ class Link(Thing, Printable):
             clicked = {}
         else:
             saved = hidden = clicked = {}
-
-        trials = trial_info(wrapped)
 
         for item in wrapped:
             show_media = False
@@ -375,7 +394,7 @@ class Link(Thing, Printable):
             item.over_18 = bool(item.over_18 or item.subreddit.over_18 or
                                 item.nsfw_str)
             item.nsfw = item.over_18 and user.pref_label_nsfw
-            
+
             item.is_author = (user == item.author)
 
             item.thumbnail_sprited = False
@@ -409,7 +428,7 @@ class Link(Thing, Printable):
             item.urlprefix = ''
 
             if user_is_loggedin:
-                item.saved =  (user, item) in saved
+                item.saved = (user, item) in saved
                 item.hidden = (user, item) in hidden
 
                 item.clicked = bool(clicked.get((user, item, 'click')))
@@ -420,7 +439,7 @@ class Link(Thing, Printable):
             item.permalink = item.make_permalink(item.subreddit)
             if item.is_self:
                 item.url = item.make_permalink(item.subreddit,
-                                               force_domain = True)
+                                               force_domain=True)
 
             if g.shortdomain:
                 item.shortlink = g.shortdomain + '/' + item._id36
@@ -456,9 +475,9 @@ class Link(Thing, Printable):
 
             item.subreddit_path = item.subreddit.path
             if cname:
-                item.subreddit_path = ("http://" + 
-                     get_domain(cname = (site == item.subreddit),
-                                subreddit = False))
+                item.subreddit_path = ("http://" +
+                     get_domain(cname=(site == item.subreddit),
+                                subreddit=False))
                 if site != item.subreddit:
                     item.subreddit_path += item.subreddit.path
             item.domain_path = "/domain/%s/" % item.domain
@@ -469,7 +488,7 @@ class Link(Thing, Printable):
             item.link_child, item.editable = make_link_child(item)
 
             item.tblink = "http://%s/tb/%s" % (
-                get_domain(cname = cname, subreddit=False),
+                get_domain(cname=cname, subreddit=False),
                 item._id36)
 
             if item.is_self:
@@ -505,8 +524,6 @@ class Link(Thing, Printable):
                 item.author = DeletedUser()
                 item.as_deleted = True
 
-            item.trial_info = trials.get(item._fullname, None)
-
             item.approval_checkmark = None
 
             item_age = datetime.now(g.tz) - item._date
@@ -527,16 +544,12 @@ class Link(Thing, Printable):
                     else:
                         item.approval_checkmark = _("approved by a moderator")
 
-                if item.trial_info is not None:
-                    item.reveal_trial_info = True
-                    item.use_big_modbuttons = True
-
             item.expunged = False
             if item.is_self:
                 item.expunged = Link._should_expunge_selftext(item)
 
             item.editted = getattr(item, "editted", False)
-            
+
             taglinetext = ''
             if item.different_sr:
                 author_text = (" <span>" + _("by %(author)s to %(reddit)s") +
@@ -581,7 +594,7 @@ class Link(Thing, Printable):
         """return's a link's subreddit. in most case the subreddit is already
         on the wrapped link (as .subreddit), and that should be used
         when possible. """
-        return Subreddit._byID(self.sr_id, True, return_dict = False)
+        return Subreddit._byID(self.sr_id, True, return_dict=False)
 
 class LinksByUrl(tdb_cassandra.View):
     _use_db = True
@@ -609,31 +622,71 @@ class PromotedLink(Link):
 
     @classmethod
     def add_props(cls, user, wrapped):
-        # prevents cyclic dependencies
-        from r2.lib import promote
         Link.add_props(user, wrapped)
         user_is_sponsor = c.user_is_sponsor
 
-        status_dict = dict((v, k) for k, v in promote.STATUS.iteritems())
+        status_dict = dict((v, k) for k, v in PROMOTE_STATUS.iteritems())
         for item in wrapped:
             # these are potentially paid for placement
             item.nofollow = True
             item.user_is_sponsor = user_is_sponsor
             status = getattr(item, "promote_status", -1)
             if item.is_author or c.user_is_sponsor:
-                item.rowstyle = "link " + promote.STATUS.name[status].lower()
+                item.rowstyle = "link " + PROMOTE_STATUS.name[status].lower()
             else:
                 item.rowstyle = "link promoted"
         # Run this last
         Printable.add_props(user, wrapped)
 
+
+def make_comment_gold_message(comment, user_gilded):
+    if comment.gildings == 0 or comment._spam or comment._deleted:
+        return None
+
+    author = Account._byID(comment.author_id, data=True)
+    if not author._deleted:
+        author_name = author.name
+    else:
+        author_name = _("[deleted]")
+
+    if c.user_is_loggedin and comment.author_id == c.user._id:
+        gilded_message = ungettext(
+            "a redditor gifted you a month of reddit gold for this comment.",
+            "redditors have gifted you %(months)d months of reddit gold for "
+            "this comment.",
+            comment.gildings
+        )
+    elif user_gilded:
+        gilded_message = ungettext(
+            "you have gifted reddit gold to %(recipient)s for this comment.",
+            "you and other redditors have gifted %(months)d months of "
+            "reddit gold to %(recipient)s for this comment.",
+            comment.gildings
+        )
+    else:
+        gilded_message = ungettext(
+            "a redditor has gifted reddit gold to %(recipient)s for this "
+            "comment.",
+            "redditors have gifted %(months)d months of reddit gold to "
+            "%(recipient)s for this comment.",
+            comment.gildings
+        )
+
+    return gilded_message % dict(
+        recipient=author_name,
+        months=comment.gildings,
+    )
+
+
 class Comment(Thing, Printable):
-    _data_int_props = Thing._data_int_props + ('reported',)
+    _data_int_props = Thing._data_int_props + ('reported', 'gildings')
     _defaults = dict(reported=0,
                      parent_id=None,
                      moderator_banned=False,
                      new=False,
-                     banned_before_moderator=False)
+                     gildings=0,
+                     banned_before_moderator=False,
+                     parents=None)
     _essentials = ('link_id', 'author_id')
 
     def _markdown(self):
@@ -643,12 +696,25 @@ class Comment(Thing, Printable):
     def _new(cls, author, link, parent, body, ip):
         from r2.lib.db.queries import changed
 
-        c = Comment(_ups = 1,
-                    body = body,
-                    link_id = link._id,
-                    sr_id = link.sr_id,
-                    author_id = author._id,
-                    ip = ip)
+        kw = {}
+        if link.comment_tree_version > 1:
+            # for top-level comments, parents is an empty string
+            # for all others, it looks like "<id36>:<id36>:...".
+            if parent:
+                if parent.parent_id:
+                    if parent.parents is None:
+                        parent._fill_in_parents()
+                    kw['parents'] = parent.parents + ':' + parent._id36
+                else:
+                    kw['parents'] = parent._id36
+
+        c = Comment(_ups=1,
+                    body=body,
+                    link_id=link._id,
+                    sr_id=link.sr_id,
+                    author_id=author._id,
+                    ip=ip,
+                    **kw)
 
         c._spam = author._spam
 
@@ -673,6 +739,8 @@ class Comment(Thing, Printable):
 
         changed(link, True)  # link's number of comments changed
 
+        CommentsByAccount.add_comment(author, c)
+
         inbox_rel = None
         # only global admins can be message spammed.
         # Don't send the message if the recipient has blocked
@@ -685,6 +753,12 @@ class Comment(Thing, Printable):
             inbox_rel = Inbox._add(to, c, name, orangered=orangered)
 
         return (c, inbox_rel)
+
+    def _save(self, user):
+        CommentSavesByAccount._save(user, self)
+
+    def _unsave(self, user):
+        CommentSavesByAccount._unsave(user, self)
 
     @property
     def subreddit_slow(self):
@@ -699,7 +773,7 @@ class Comment(Thing, Printable):
         else:
             l = Link._byID(self.link_id, True)
             sr_id = l.sr_id
-        return Subreddit._byID(sr_id, True, return_dict = False)
+        return Subreddit._byID(sr_id, True, return_dict=False)
 
     def keep_item(self, wrapped):
         return True
@@ -725,19 +799,66 @@ class Comment(Thing, Printable):
         return self.make_permalink(l, l.subreddit_slow,
                                    context=context, anchor=anchor)
 
+    def _gild(self, user):
+        now = datetime.now(g.tz)
+
+        self._incr("gildings")
+
+        GildedCommentsByAccount.gild_comment(user, self)
+
+        from r2.lib.db import queries
+        with CachedQueryMutator() as m:
+            gilding = utils.Storage(thing=self, date=now)
+            m.insert(queries.get_gilded_comments(), [gilding])
+
+    def _fill_in_parents(self):
+        if not self.parent_id:
+            self.parents = ''
+            self._commit()
+            return
+        parent = Comment._byID(self.parent_id)
+        if parent.parent_id:
+            if parent.parents is None:
+                parent._fill_in_parents()
+            self.parents = parent.parents + ':' + parent._id36
+        else:
+            self.parents = parent._id36
+        self._commit()
+
+    def parent_path(self):
+        """Returns path of comment in tree as list of comment ids.
+
+        The returned list will always begin with -1, followed by comment ids in
+        path order. The return value for top-level comments will always be [-1].
+        """
+        if self.parent_id and self.parents is None:
+            self._fill_in_parents()
+
+        if self.parents is None:
+            return [-1]
+
+        # eliminate any leading colons from the path and parse
+        pids = [long(pid_str, 36) if pid_str else -1
+                for pid_str in self.parents.lstrip(':').split(':')]
+
+        # ensure path starts with -1
+        if pids[0] != -1:
+            pids.insert(0, -1)
+
+        return pids
+
     @classmethod
     def add_props(cls, user, wrapped):
         from r2.lib.template_helpers import add_attr, get_domain
-        from r2.lib import promote
         from r2.lib.wrapped import CachedVariable
         from r2.lib.pages import WrappedUser
 
         #fetch parent links
-        links = Link._byID(set(l.link_id for l in wrapped), data = True,
-                           return_dict = True, stale=True)
+        links = Link._byID(set(l.link_id for l in wrapped), data=True,
+                           return_dict=True, stale=True)
 
         # fetch authors
-        authors = Account._byID(set(l.author_id for l in links.values()), data=True, 
+        authors = Account._byID(set(l.author_id for l in links.values()), data=True,
                                 return_dict=True, stale=True)
 
         #get srs for comments that don't have them (old comments)
@@ -757,7 +878,7 @@ class Comment(Thing, Printable):
 
         can_reply_srs = set(s._id for s in subreddits if s.can_comment(user)) \
                         if c.user_is_loggedin else set()
-        can_reply_srs.add(promote.get_promote_srid())
+        can_reply_srs.add(get_promote_srid())
 
         min_score = user.pref_min_comment_score
 
@@ -767,6 +888,24 @@ class Comment(Thing, Printable):
         focal_comment = c.focal_comment
         cname = c.cname
         site = c.site
+
+        if user_is_loggedin:
+            gilded = [comment for comment in wrapped if comment.gildings > 0]
+            try:
+                user_gildings = GildedCommentsByAccount.fast_query(user,
+                                                                   gilded)
+            except tdb_cassandra.TRANSIENT_EXCEPTIONS as e:
+                g.log.warning("Cassandra gilding lookup failed: %r", e)
+                user_gildings = {}
+
+            try:
+                saved = CommentSavesByAccount.fast_query(user, wrapped)
+            except tdb_cassandra.TRANSIENT_EXCEPTIONS as e:
+                g.log.warning("Cassandra comment save lookup failed: %r", e)
+                saved = {}
+        else:
+            user_gildings = {}
+            saved = {}
 
         for item in wrapped:
             # for caching:
@@ -783,7 +922,7 @@ class Comment(Thing, Printable):
                 item.subreddit = item.subreddit_slow
             if item.author_id == item.link.author_id and not item.link._deleted:
                 add_attr(item.attribs, 'S',
-                         link = item.link.make_permalink(item.subreddit))
+                         link=item.link.make_permalink(item.subreddit))
             if not hasattr(item, 'target'):
                 item.target = "_top" if cname else None
             if item.parent_id:
@@ -798,9 +937,17 @@ class Comment(Thing, Printable):
             item.can_reply = False
             if c.can_reply or (item.sr_id in can_reply_srs):
                 age = datetime.now(g.tz) - item._date
-                if age.days < g.REPLY_AGE_LIMIT:
+                if item.link.promoted or age.days < g.REPLY_AGE_LIMIT:
                     item.can_reply = True
 
+            if user_is_loggedin:
+                item.user_gilded = (user, item) in user_gildings
+                item.saved = (user, item) in saved
+            else:
+                item.user_gilded = False
+                item.saved = False
+            item.gilded_message = make_comment_gold_message(item,
+                                                            item.user_gilded)
 
             # not deleted on profile pages,
             # deleted if spam and not author or admin
@@ -826,9 +973,9 @@ class Comment(Thing, Printable):
 
                 item.subreddit_path = item.subreddit.path
                 if cname:
-                    item.subreddit_path = ("http://" + 
-                         get_domain(cname = (site == item.subreddit),
-                                    subreddit = False))
+                    item.subreddit_path = ("http://" +
+                         get_domain(cname=(site == item.subreddit),
+                                    subreddit=False))
                     if site != item.subreddit:
                         item.subreddit_path += item.subreddit.path
 
@@ -856,7 +1003,7 @@ class Comment(Thing, Printable):
             item.permalink = item.make_permalink(item.link, item.subreddit)
 
             item.is_author = (user == item.author)
-            item.is_focal  = (focal_comment == item._id36)
+            item.is_focal = (focal_comment == item._id36)
 
             item_age = c.start_time - item._date
             if item_age.days > g.VOTE_AGE_LIMIT:
@@ -867,11 +1014,11 @@ class Comment(Thing, Printable):
             #will seem less horrible when add_props is in pages.py
             from r2.lib.pages import UserText
             item.usertext = UserText(item, item.body,
-                                     editable = item.is_author,
-                                     nofollow = item.nofollow,
-                                     target = item.target,
-                                     extra_css = extra_css)
-                                     
+                                     editable=item.is_author,
+                                     nofollow=item.nofollow,
+                                     target=item.target,
+                                     extra_css=extra_css)
+
             item.lastedited = CachedVariable("lastedited")
 
         # Run this last
@@ -952,7 +1099,7 @@ class MoreComments(Printable):
     def wrapped_cache_key(item, style):
         return False
 
-    def __init__(self, link, depth, parent_id = None):
+    def __init__(self, link, depth, parent_id=None):
         from r2.lib.wrapped import CachedVariable
 
         if parent_id is not None:
@@ -993,7 +1140,7 @@ class Message(Thing, Printable):
                      to_collapse=None,
                      author_collapse=None,
                      from_sr=False)
-    _data_int_props = Thing._data_int_props + ('reported', )
+    _data_int_props = Thing._data_int_props + ('reported',)
     _essentials = ('author_id',)
     cache_ignore = set(["to", "subreddit"]).union(Printable.cache_ignore)
 
@@ -1094,7 +1241,7 @@ class Message(Thing, Printable):
                 # moderators can view messages on subreddits they moderate
                 if is_moderator:
                     return True
-                elif self.first_message: 
+                elif self.first_message:
                     first = Message._byID(self.first_message, True)
                     return (first.author_id == c.user._id)
 
@@ -1117,19 +1264,19 @@ class Message(Thing, Printable):
 
         # load the subreddit field if one exists:
         sr_ids = set(w.sr_id for w in wrapped if w.sr_id is not None)
-        m_subreddits = Subreddit._byID(sr_ids, data = True, return_dict = True)
+        m_subreddits = Subreddit._byID(sr_ids, data=True, return_dict=True)
 
         # load the links and their subreddits (if comment-as-message)
         links = Link._byID(set(l.link_id for l in wrapped if l.was_comment),
-                           data = True,
-                           return_dict = True)
+                           data=True,
+                           return_dict=True)
         # subreddits of the links (for comment-as-message)
         l_subreddits = Subreddit._byID(set(l.sr_id for l in links.values()),
-                                       data = True, return_dict = True)
+                                       data=True, return_dict=True)
 
         parents = Comment._byID(set(l.parent_id for l in wrapped
                                   if l.parent_id and l.was_comment),
-                                data = True, return_dict = True)
+                                data=True, return_dict=True)
 
         # load the unread list to determine message newness
         unread = set(queries.get_unread_inbox(user))
@@ -1146,7 +1293,7 @@ class Message(Thing, Printable):
                 item.recipient = (item.author_id != c.user._id)
             else:
                 item.recipient = (item.to_id == c.user._id)
-            
+
             # new-ness is stored on the relation
             if item.author_id == c.user._id:
                 item.new = False
@@ -1184,14 +1331,14 @@ class Message(Thing, Printable):
                     item.message_style = "post-reply"
             elif item.sr_id is not None:
                 item.subreddit = m_subreddits[item.sr_id]
-            
+
             item.hide_author = False
             if getattr(item, "from_sr", False):
                 if not (item.subreddit.is_moderator(c.user) or
                         c.user_is_admin):
                     item.author = item.subreddit
                     item.hide_author = True
-            
+
             item.is_collapsed = None
             if not item.new:
                 if item.recipient:
@@ -1246,85 +1393,250 @@ class Message(Thing, Printable):
 class SaveHide(Relation(Account, Link)): pass
 class Click(Relation(Account, Link)): pass
 
-class SimpleRelation(tdb_cassandra.Relation):
-    _use_db = False
-    _read_consistency_level = tdb_cassandra.CL.ONE
+
+class GildedCommentsByAccount(tdb_cassandra.DenormalizedRelation):
+    _use_db = True
+    _last_modified_name = 'Gilding'
+    _views = []
 
     @classmethod
-    def _create(cls, user, link, write_consistency_level = None):
-        n = cls(thing1_id = user._id36,
-                thing2_id = link._id36)
-        n._commit(write_consistency_level=write_consistency_level)
-        return n
+    def value_for(cls, thing1, thing2, opaque):
+        return ''
 
     @classmethod
-    def _uncreate(cls, user, link):
+    def gild_comment(cls, user, comment):
+        cls.create(user, [comment])
+
+
+@view_of(GildedCommentsByAccount)
+class GildingsByThing(tdb_cassandra.View):
+    _use_db = True
+    _extra_schema_creation_args = {
+        "key_validation_class": tdb_cassandra.UTF8_TYPE,
+        "column_name_class": tdb_cassandra.UTF8_TYPE,
+    }
+
+    @classmethod
+    def get_gilder_ids(cls, thing):
+        columns = cls.get_time_sorted_columns(thing._fullname)
+        return [int(account_id, 36) for account_id in columns.iterkeys()]
+
+    @classmethod
+    def create(cls, user, things, opaque):
+        for thing in things:
+            cls._set_values(thing._fullname, {user._id36: ""})
+
+    @classmethod
+    def delete(cls, user, things):
+        # gildings cannot be undone
+        raise NotImplementedError()
+
+
+@view_of(GildedCommentsByAccount)
+class GildingsByDay(tdb_cassandra.View):
+    _use_db = True
+    _compare_with = tdb_cassandra.TIME_UUID_TYPE
+    _extra_schema_creation_args = {
+        "key_validation_class": tdb_cassandra.ASCII_TYPE,
+        "column_name_class": tdb_cassandra.TIME_UUID_TYPE,
+        "default_validation_class": tdb_cassandra.UTF8_TYPE,
+    }
+
+    @staticmethod
+    def _rowkey(date):
+        return date.strftime("%Y-%m-%d")
+
+    @classmethod
+    def get_gildings(cls, date):
+        key = cls._rowkey(date)
+        columns = cls.get_time_sorted_columns(key)
+        gildings = []
+        for name, json_blob in columns.iteritems():
+            timestamp = convert_uuid_to_time(name)
+            date = datetime.utcfromtimestamp(timestamp).replace(tzinfo=g.tz)
+
+            gilding = json.loads(json_blob)
+            gilding["date"] = date
+            gilding["user"] = int(gilding["user"], 36)
+            gildings.append(gilding)
+        return gildings
+
+    @classmethod
+    def create(cls, user, things, opaque):
+        key = cls._rowkey(datetime.now(g.tz))
+
+        columns = {}
+        for thing in things:
+            columns[uuid.uuid1()] = json.dumps({
+                "user": user._id36,
+                "thing": thing._fullname,
+            })
+        cls._set_values(key, columns)
+
+    @classmethod
+    def delete(cls, user, things):
+        # gildings cannot be undone
+        raise NotImplementedError()
+
+
+class _SaveHideByAccount(tdb_cassandra.DenormalizedRelation):
+    @classmethod
+    def value_for(cls, thing1, thing2, opaque):
+        return ''
+
+    @classmethod
+    def _cached_queries(cls, user, thing):
+        return []
+
+    @classmethod
+    def _savehide(cls, user, things):
+        things = tup(things)
+        now = datetime.now(g.tz)
+        with CachedQueryMutator() as m:
+            for thing in things:
+                # action_date is only used by the cached queries as the sort
+                # value, we don't want to write it. Report.new(link) needs to
+                # incr link.reported but will fail if the link is dirty.
+                thing.__setattr__('action_date', now, make_dirty=False)
+                for q in cls._cached_queries(user, thing):
+                    m.insert(q, [thing])
+        cls.create(user, things)
+
+    @classmethod
+    def _unsavehide(cls, user, things):
+        things = tup(things)
+        with CachedQueryMutator() as m:
+            for thing in things:
+                for q in cls._cached_queries(user, thing):
+                    m.delete(q, [thing])
+        cls.destroy(user, things)
+
+
+class _ThingSavesByAccount(_SaveHideByAccount):
+    @classmethod
+    def _save(cls, user, things):
+        cls._savehide(user, things)
+
+    @classmethod
+    def _unsave(cls, user, things):
+        cls._unsavehide(user, things)
+
+
+class LinkSavesByAccount(_ThingSavesByAccount):
+    _use_db = True
+    _last_modified_name = 'Save'
+    _views = []
+
+    @classmethod
+    def _cached_queries(cls, user, thing):
+        from r2.lib.db import queries
+        return [queries.get_saved_links(user, 'none'),
+                queries.get_saved_links(user, thing.sr_id)]
+
+
+class CommentSavesByAccount(_ThingSavesByAccount):
+    _use_db = True
+    _last_modified_name = 'CommentSave'
+    _views = []
+
+    @classmethod
+    def _cached_queries(cls, user, thing):
+        from r2.lib.db import queries
+        return [queries.get_saved_comments(user, 'none'),
+                queries.get_saved_comments(user, thing.sr_id)]
+
+
+class _ThingHidesByAccount(_SaveHideByAccount):
+    @classmethod
+    def _hide(cls, user, things):
+        cls._savehide(user, things)
+
+    @classmethod
+    def _unhide(cls, user, things):
+        cls._unsavehide(user, things)
+
+
+class LinkHidesByAccount(_ThingHidesByAccount):
+    _use_db = True
+    _last_modified_name = 'Hide'
+    _views = []
+
+    @classmethod
+    def _cached_queries(cls, user, thing):
+        from r2.lib.db import queries
+        return [queries.get_hidden_links(user)]
+
+
+class _ThingSavesBySubreddit(tdb_cassandra.View):
+    @classmethod
+    def _rowkey(cls, user, thing):
+        return user._id36
+
+    @classmethod
+    def _column(cls, user, thing):
+        return {utils.to36(thing.sr_id): ''}
+
+    @classmethod
+    def get_saved_subreddits(cls, user):
+        rowkey = user._id36
         try:
-            cls._fast_query(user, link)._destroy()
-        except tdb_cassandra.NotFound:
-            pass
+            columns = cls._cf.get(rowkey)
+        except NotFoundException:
+            return []
+
+        sr_id36s = columns.keys()
+        srs = Subreddit._byID36(sr_id36s, return_dict=False, data=True)
+        return sorted([sr.name for sr in srs])
+
+    @classmethod
+    def create(cls, user, things, opaque):
+        for thing in things:
+            rowkey = cls._rowkey(user, thing)
+            column = cls._column(user, thing)
+            cls._set_values(rowkey, column)
+
+    @classmethod
+    def _check_empty(cls, user, sr_id):
+        return False
+
+    @classmethod
+    def destroy(cls, user, things):
+        # See if thing's sr is present anymore
+        sr_ids = set([thing.sr_id for thing in things])
+        for sr_id in set(sr_ids):
+            if cls._check_empty(user, sr_id):
+                cls._cf.remove(user._id36, [utils.to36(sr_id)])
 
 
-class CassandraSave(SimpleRelation):
+@view_of(LinkSavesByAccount)
+class LinkSavesBySubreddit(_ThingSavesBySubreddit):
     _use_db = True
-    _cf_name = 'Save'
-    _connection_pool = 'main'
-
-    _thing1_cls = Account
-    _thing2_cls = Link
 
     @classmethod
-    def _save(cls, *a, **kw):
-        return cls._create(*a, **kw)
+    def _check_empty(cls, user, sr_id):
+        from r2.lib.db import queries
+        q = queries.get_saved_links(user, sr_id)
+        q.fetch()
+        return not q.data
 
-    @classmethod
-    def _unsave(cls, *a, **kw):
-        return cls._uncreate(*a, **kw)
 
-    def _on_create(self):
-        # it's okay if these indices get lost
-        wcl = tdb_cassandra.CL.ONE
-
-        SavesByAccount._set_values(self.thing1_id,
-                                   {self._id: self._id},
-                                   write_consistency_level=wcl)
-
-        return SimpleRelation._on_create(self)
-
-    def _on_destroy(self):
-        sba = SavesByAccount._byID(self.thing1_id)
-        del sba[self._id]
-        sba._commit()
-
-        return SimpleRelation._on_destroy(self)
-
-class CassandraHide(SimpleRelation):
+@view_of(CommentSavesByAccount)
+class CommentSavesBySubreddit(_ThingSavesBySubreddit):
     _use_db = True
-    _cf_name = 'Hide'
-    _ttl = 7*24*60*60
-    _connection_pool = 'main'
-
-    _thing1_cls = Account
-    _thing2_cls = Link
 
     @classmethod
-    def _hide(cls, *a, **kw):
-        return cls._create(*a, **kw)
+    def _check_empty(cls, user, sr_id):
+        from r2.lib.db import queries
+        q = queries.get_saved_comments(user, sr_id)
+        q.fetch()
+        return not q.data
 
-    @classmethod
-    def _unhide(cls, *a, **kw):
-        return cls._uncreate(*a, **kw)
-
-class SavesByAccount(tdb_cassandra.View):
-    _use_db = True
-    _cf_name = 'SavesByAccount'
-    _connection_pool = 'main'
 
 class Inbox(MultiRelation('inbox',
                           Relation(Account, Comment),
                           Relation(Account, Message))):
 
-    _defaults = dict(new = False)
+    _defaults = dict(new=False)
 
     @classmethod
     def _add(cls, to, obj, *a, **kw):
@@ -1365,14 +1677,6 @@ class Inbox(MultiRelation('inbox',
                 res.append(i)
         return res
 
-class LinkOnTrial(Printable):
-    @classmethod
-    def add_props(cls, user, wrapped):
-        Link.add_props(user, wrapped)
-        for item in wrapped:
-            item.rowstyle = "link ontrial"
-        # Run this last
-        Printable.add_props(user, wrapped)
 
 class ModeratorInbox(Relation(Subreddit, Message)):
     #TODO: shouldn't dupe this
@@ -1386,7 +1690,7 @@ class ModeratorInbox(Relation(Subreddit, Message)):
             sr._load()
 
         moderators = Account._byID(sr.moderator_ids(), data=True,
-                                   return_dict = False)
+                                   return_dict=False)
         for m in moderators:
             if obj.author_id != m._id and not getattr(m, 'modmsgtime', None):
                 m.modmsgtime = obj._date
@@ -1406,3 +1710,30 @@ class ModeratorInbox(Relation(Subreddit, Message)):
                 i._commit()
                 res.append(i)
         return res
+
+class CommentsByAccount(tdb_cassandra.DenormalizedRelation):
+    _use_db = True
+    _write_last_modified = False
+    _views = []
+
+    @classmethod
+    def value_for(cls, thing1, thing2, opaque):
+        return ''
+
+    @classmethod
+    def add_comment(cls, account, comment):
+        cls.create(account, [comment])
+
+
+class LinksByAccount(tdb_cassandra.DenormalizedRelation):
+    _use_db = True
+    _write_last_modified = False
+    _views = []
+
+    @classmethod
+    def value_for(cls, thing1, thing2, opaque):
+        return ''
+
+    @classmethod
+    def add_link(cls, account, link):
+        cls.create(account, [link])

@@ -20,26 +20,89 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+from copy import deepcopy
 from datetime import datetime
 import cPickle as pickle
-from copy import deepcopy
-import random
-
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgres
-
-from r2.lib.utils import storage, storify, iters, Results, tup, TransSet
+import logging
 import operators
-from pylons import g, c
+import re
+import threading
+
+from pylons import g, c, request
+import sqlalchemy as sa
+
+from r2.lib import filters
+from r2.lib.utils import (
+    iters,
+    Results,
+    simple_traceback,
+    storage,
+    tup,
+)
+
+
 dbm = g.dbm
 predefined_type_ids = g.predefined_type_ids
-
-import logging
 log_format = logging.Formatter('sql: %(message)s')
-
 max_val_len = 1000
 
-transactions = TransSet()
+
+class TransactionSet(threading.local):
+    """A manager for SQL transactions.
+
+    This implements a thread local meta-transaction which may span multiple
+    databases.  The existing tdb_sql code calls add_engine before executing
+    writes.  If thing.py calls begin then these calls will actually kick in
+    and start a transaction that must be committed or rolled back by thing.py.
+
+    Because this involves creating transactions at the connection level, this
+    system implicitly relies on using the threadlocal strategy for the
+    sqlalchemy engines.
+
+    This system is a bit awkward, and should be replaced with something that
+    doesn't use module-globals when doing a cleanup of tdb_sql.
+
+    """
+
+    def __init__(self):
+        self.transacting_engines = set()
+        self.transaction_begun = False
+
+    def begin(self):
+        """Indicate that a transaction has begun."""
+        self.transaction_begun = True
+
+    def add_engine(self, engine):
+        """Add a database connection to the meta-transaction if active."""
+        if not self.transaction_begun:
+            return
+
+        if engine not in self.transacting_engines:
+            engine.begin()
+            self.transacting_engines.add(engine)
+
+    def commit(self):
+        """Commit the meta-transaction."""
+        try:
+            for engine in self.transacting_engines:
+                engine.commit()
+        finally:
+            self._clear()
+
+    def rollback(self):
+        """Roll back the meta-transaction."""
+        try:
+            for engine in self.transacting_engines:
+                engine.rollback()
+        finally:
+            self._clear()
+
+    def _clear(self):
+        self.transacting_engines.clear()
+        self.transaction_begun = False
+
+
+transactions = TransactionSet()
 
 MAX_THING_ID = 9223372036854775807 # http://www.postgresql.org/docs/8.3/static/datatype-numeric.html
 
@@ -301,27 +364,19 @@ def get_write_table(tables):
     else:
         return tables[0]
 
-import re, traceback, cStringIO as StringIO
-_spaces = re.compile('[\s]+')
 def add_request_info(select):
-    from pylons import request
-    from r2.lib import filters
     def sanitize(txt):
-        return _spaces.sub(' ', txt).replace("/", "|").replace("-", "_").replace(';', "").replace("*", "").replace(r"/", "")
-    s = StringIO.StringIO()
-    traceback.print_stack( file = s)
-    tb = s.getvalue()
-    if tb:
-        tb = tb.split('\n')[0::2]
-        tb = [x.split('/')[-1] for x in tb if "/r2/" in x]
-        tb = '\n'.join(tb[-15:-2])
+        return "".join(x if x.isalnum() else "."
+                       for x in filters._force_utf8(txt))
+
+    tb = simple_traceback(limit=12)
     try:
         if (hasattr(request, 'path') and
             hasattr(request, 'ip') and
             hasattr(request, 'user_agent')):
             comment = '/*\n%s\n%s\n%s\n*/' % (
                 tb or "", 
-                filters._force_utf8(sanitize(request.fullpath)),
+                sanitize(request.fullpath),
                 sanitize(request.ip))
             return select.prefix_with(comment)
     except UnicodeDecodeError:
@@ -655,6 +710,8 @@ def sa_op(op):
         return sa.or_(*[sa_op(o) for o in op.ops])
     elif isinstance(op, operators.and_):
         return sa.and_(*[sa_op(o) for o in op.ops])
+    elif isinstance(op, operators.not_):
+        return sa.not_(*[sa_op(o) for o in op.ops])
 
     #else, assume op is an instance of op
     if isinstance(op, operators.eq):
@@ -669,6 +726,8 @@ def sa_op(op):
         fn = lambda x,y: x >= y
     elif isinstance(op, operators.lte):
         fn = lambda x,y: x <= y
+    elif isinstance(op, operators.in_):
+        return sa.or_(op.lval.in_(op.rval))
 
     rval = tup(op.rval)
 

@@ -27,6 +27,9 @@ import os
 from routes import Mapper
 from pylons import config
 
+def not_in_sr(environ, results):
+    return 'subreddit' not in environ and 'sub_domain' not in environ
+
 def make_map():
     map = Mapper()
     mc = map.connect
@@ -58,6 +61,7 @@ def make_map():
 
     mc('/about/message/:where', controller='message', action='listing')
     mc('/about/log', controller='front', action='moderationlog')
+    mc('/about/sidebar', controller='front', action='sidebar')
     mc('/about', controller='front', action='about')
     mc('/about/:location', controller='front', action='editreddit',
        location='about')
@@ -88,8 +92,6 @@ def make_map():
     mc('/feedback', controller='feedback', action='feedback')
     mc('/ad_inq', controller='feedback', action='ad_inq')
 
-    mc('/admin/usage', controller='usage')
-
     # Used for editing ads
     mc('/admin/ads', controller='ads')
     mc('/admin/ads/:adcn/:action', controller='ads',
@@ -115,12 +117,13 @@ def make_map():
     mc('/prefs/:location', controller='forms', action='prefs',
        location='options')
 
-    mc('/depmod', controller='forms', action='depmod')
-
     mc('/info/0:article/*rest', controller='front',
        action='oldinfo', dest='comments', type='ancient')
     mc('/info/:article/:dest/:comment', controller='front',
        action='oldinfo', type='old', dest='comments', comment=None)
+
+    mc("/comments/gilded", action="listing", controller="gilded",
+       conditions={"function": not_in_sr})
 
     mc('/related/:article/:title', controller='front',
        action='related', title=None)
@@ -141,18 +144,30 @@ def make_map():
     mc('/framebuster/:what/:blah',
        controller='front', action='framebuster')
 
+    mc('/admin/promoted', controller='promote', action='admin')
     mc('/promoted/edit_promo/:link',
        controller='promote', action='edit_promo')
-    mc('/promoted/pay/:link/:indx',
+    mc('/promoted/edit_promo_cpm/:link', # development only (don't link to url)
+       controller='promote', action='edit_promo_cpm')
+    mc('/promoted/edit_promo/pc/:campaign', controller='promote', # admin only
+       action='edit_promo_campaign')
+    mc('/promoted/pay/:link/:campaign',
        controller='promote', action='pay')
     mc('/promoted/graph',
        controller='promote', action='graph')
+    mc('/promoted/admin/graph', controller='promote', action='admingraph')
+    mc('/promoted/inventory/:sr_name', 
+       controller='promote', action='inventory')
+    mc('/promoted/traffic/headline/:link', 
+       controller='front', action='promo_traffic')
+
     mc('/promoted/:action', controller='promote',
        requirements=dict(action="edit_promo|new_promo|roadblock"))
     mc('/promoted/:sort', controller='promote', action="listing")
     mc('/promoted/', controller='promoted', action="listing", sort="")
 
     mc('/health', controller='health', action='health')
+    mc('/health/ads', controller='health', action='promohealth')
 
     mc('/', controller='hot', action='listing')
 
@@ -174,16 +189,19 @@ def make_map():
     mc('/message/moderator/:subwhere', controller='message', action='listing',
        where='moderator')
 
-    mc('/thanks', controller='forms', action="thanks", secret='')
-    mc('/thanks/:secret', controller='forms', action="thanks")
+    mc('/thanks', controller='forms', action="claim", secret='')
+    mc('/thanks/:secret', controller='forms', action="claim")
 
     mc('/gold', controller='forms', action="gold")
+    mc('/gold/about', controller='front', action='gold_info')
+    mc('/gold/thanks', controller='front', action='goldthanks')
 
     mc('/password', controller='forms', action="password")
     mc('/:action', controller='front',
        requirements=dict(action="random|framebuster|selfserviceoatmeal"))
     mc('/:action', controller='embed',
        requirements=dict(action="help|blog|faq"))
+    mc('/help/gold', controller='redirect', action='redirect', dest='/gold/about')
     mc('/help/*anything', controller='embed', action='help')
     
     mc('/wiki/create/*page', controller='wiki', action='wiki_create')
@@ -194,10 +212,12 @@ def make_map():
     mc('/wiki/revisions', controller='wiki', action='wiki_recent')
     mc('/wiki/pages', controller='wiki', action='wiki_listing')
     
-    mc('/wiki/api/edit/*page', controller='wikiapi', action='wiki_edit')
-    mc('/wiki/api/hide/:revision/*page', controller='wikiapi', action='wiki_revision_hide')
-    mc('/wiki/api/revert/:revision/*page', controller='wikiapi', action='wiki_revision_revert')
-    mc('/wiki/api/alloweditor/:act/:username/*page', controller='wikiapi', action='wiki_allow_editor')
+    mc('/api/wiki/create', controller='wikiapi', action='wiki_create')
+    mc('/api/wiki/edit', controller='wikiapi', action='wiki_edit')
+    mc('/api/wiki/hide', controller='wikiapi', action='wiki_revision_hide')
+    mc('/api/wiki/revert', controller='wikiapi', action='wiki_revision_revert')
+    mc('/api/wiki/alloweditor/:act', controller='wikiapi', 
+       requirements=dict(act="del|add"), action='wiki_allow_editor')
     
     mc('/wiki/*page', controller='wiki', action='wiki_page')
     mc('/wiki/', controller='wiki', action='wiki_page')
@@ -260,6 +280,8 @@ def make_map():
 
     mc('/dev', controller='redirect', action='redirect', dest='/dev/api')
     mc('/dev/api', controller='apidocs', action='docs')
+    mc('/dev/api/:mode', controller='apidocs', action='docs',
+       requirements=dict(mode="oauth"))
 
     mc("/button_info", controller="api", action="info", limit=1)
 

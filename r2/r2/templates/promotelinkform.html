@@ -35,10 +35,14 @@
 <%namespace name="utils" file="utils.html"/>
 
 ${unsafe(js.use('sponsored'))}
+
+<%def name="javascript_setup()">
 <script type="text/javascript">
   $(function() { update_bid("*[name=bid]"); }); 
 </script>
+</%def>
 
+${self.javascript_setup()}
 
 ## Create a datepicker for a form. min/maxDateSrc are the id of the
 ## element containing the min/max date - the '#' is added automatically
@@ -84,7 +88,7 @@ ${unsafe(js.use('sponsored'))}
         </p></div>
       <div class="clear"></div>
    </div>
-    <div id="campaign" style="${'display:none' if thing.link.campaigns else ''}"
+    <div id="campaign" style="${'display:none' if thing.campaigns else ''}"
          class="campaign infotext rounded" method="post" action="/api/add_campaign">
 
 
@@ -136,6 +140,7 @@ ${unsafe(js.use('sponsored'))}
         <th>total bid</th>
         <td class="prefright">
           ${error_field("BAD_BID", "bid", "div")}
+          ${error_field("BID_LIVE", "bid", "div")}
           $<input id="bid" name="bid" size="7" type="text" class="rounded styled-input"
                   style="width:auto"
                   onchange="update_bid(this)"
@@ -184,7 +189,7 @@ ${unsafe(js.use('sponsored'))}
           init_startdate();
           init_enddate();
           $("#campaign").find("button[name=create]").show().end()
-               .find("button[name=edit]").hide().end();
+               .find("button[name=save]").hide().end();
           update_bid("*[name=bid]");
        })
      </script>
@@ -198,15 +203,15 @@ ${unsafe(js.use('sponsored'))}
        ${reddit_selector(thing.default_sr, thing.sr_searches, thing.subreddits)}
      </div>
      <div class="buttons">
-       <input type="hidden" name="indx" value="" />
+       <input type="hidden" name="campaign_id36" value="" />
        <span class="status error"></span>
        <button name="cancel"
           onclick="return cancel_edit()" class="fancybutton">
          cancel
        </button>
-       <button name="edit"
+       <button name="save"
           onclick="return post_pseudo_form('.campaign', 'edit_campaign')" class="fancybutton">
-         edit
+         save
        </button>
        <button name="create"
           onclick="return post_pseudo_form('.campaign', 'edit_campaign')" class="fancybutton">
@@ -215,8 +220,14 @@ ${unsafe(js.use('sponsored'))}
      </div>
      <div class="clear"></div>
     </div>
-   <div class="existing-campaigns infotext rounded">
-      <table style="${'display:none' if not thing.link.campaigns else ''}">
+   <div class="error TOO_MANY_CAMPAIGNS field-title infotext rounded
+        ${'hidden' if len(thing.campaigns) < g.MAX_CAMPAIGNS_PER_LINK else ''}"
+        data-MAX="${g.MAX_CAMPAIGNS_PER_LINK}" data-CAMP="${len(thing.campaigns)}">
+      <p>${_("You have too many campaigns for this link.")}&#32;
+      <a href="/promoted/new_promo/">${_("It's time to start fresh!")}</a></p>
+   </div>
+   <div class="existing-campaigns infotext rounded" data-max-campaigns="${g.MAX_CAMPAIGNS_PER_LINK}">
+      <table style="${'display:none' if not thing.campaigns else ''}">
         <tr>
           <th title="${start_title}">start</th>
           <th title="${end_title}">end</th>
@@ -225,6 +236,7 @@ ${unsafe(js.use('sponsored'))}
           <th title="${targeting_title}">targeting</th>
           <th style="align:right">
             <button class="new-campaign fancybutton" 
+                    ${'disabled="disabled"' if len(thing.campaigns) >= g.MAX_CAMPAIGNS_PER_LINK else ''}
                     title="${newcamp_title}"
                     onclick="return create_campaign(this)">+ add new</button>
           </th>
@@ -232,15 +244,16 @@ ${unsafe(js.use('sponsored'))}
       </table>
       <script type="text/javascript">
         $(function() {
-           %for campaign in sorted(thing.link.campaigns.values(), \
-                                   key = lambda x: x.start_date):
-            $.new_campaign(${unsafe(','.join(simplejson.dumps(x) for x in campaign))});
+           %for rc in sorted(thing.campaigns, key=lambda rc: rc.start_date):
+            $.new_campaign(${unsafe(','.join(simplejson.dumps(attr) for attr in
+                [rc.campaign_id36, rc.start_date, rc.end_date, rc.duration,
+                 rc.bid, rc.sr, rc.status]))});
            %endfor
            $.set_up_campaigns();
           });
       </script>
       <p class="error" 
-         style="${'display:none' if thing.link.campaigns else ''}">
+         style="${'display:none' if thing.campaigns else ''}">
         You don't have any campaigns for this link yet.  You should add one.
       </p>
    </div>
@@ -393,7 +406,7 @@ ${unsafe(js.use('sponsored'))}
 <div class="save-button">
   <%
       if thing.link:
-          name = "edit"
+          name = "save"
           text = _("save options")
       else:
           name = "create"
@@ -411,6 +424,7 @@ ${unsafe(js.use('sponsored'))}
 </div>
 </div>
 
+<%def name="right_panel()">
 %if thing.link and not c.user_is_sponsor:
   <div class="bidding-history" style="padding-top: 0px;">
     <%utils:line_field title="${_('promotion history')}" css_class="rounded">
@@ -455,6 +469,9 @@ ${unsafe(js.use('sponsored'))}
 </%utils:line_field>
   </div>
 %endif
+</%def>
+
+${self.right_panel()}
 
 %if thing.link and c.user_is_sponsor:
   <div class="spacer bidding-history">
@@ -509,7 +526,7 @@ ${unsafe(js.use('sponsored'))}
       <input id="promote_note" name="note" value="" type="text" size="40" />
       <button type="submit">save</button>
       <div class="notes">
-        %for line in getattr(thing.link, "promotion_log", []):
+        %for line in thing.promotion_log:
           <p>${line}</p>
         %endfor
       </div>

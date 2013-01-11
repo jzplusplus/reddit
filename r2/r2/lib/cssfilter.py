@@ -233,7 +233,7 @@ def valid_url(prop,value,report):
         try:
             u = urlparse(url)
             valid_scheme = u.scheme and u.scheme in valid_url_schemes
-            valid_domain = strip_www(u.netloc) in g.allowed_css_linked_domains
+            valid_domain = u.netloc in g.allowed_css_linked_domains
         except ValueError:
             u = False
 
@@ -304,7 +304,7 @@ def validate_css(string):
     if len(string) > max_size_kb * 1024:
         report.append(ValidationError((msgs['too_big']
                                        % dict (max_size = max_size_kb))))
-        return (string, report)
+        return ('', report)
 
     if '\\' in string:
         report.append(ValidationError(_("if you need backslashes, you're doing it wrong")))
@@ -405,8 +405,10 @@ def rendered_link(links, media, compress):
     with c.user.safe_set_attr:
         c.user.pref_compress = compress
         c.user.pref_media    = media
-        links = wrap_links(links, show_nums = True, num = 1)
-        return links.render(style = "html")
+    links = wrap_links(links, show_nums = True, num = 1)
+    delattr(c.user, 'pref_compress')
+    delattr(c.user, 'pref_media') 
+    return links.render(style = "html")
 
 def rendered_comment(comments):
     return wrap_links(comments, num = 1).render(style = "html")

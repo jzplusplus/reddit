@@ -25,12 +25,12 @@
     from r2.lib.template_helpers import add_sr
 %>
 <%namespace file="printable.compact" import="delete_report_buttons"/>
-<%namespace file="printable.html" import="arrow, score"/>
+<%namespace file="printable.html" import="arrow, score, thing_css_rowclass"/>
 <%namespace file="utils.html" import="plain_link" />
 <%namespace file="utils.compact" import="icon_button" />
 <%namespace file="printablebuttons.html" import="simple_button"/>
 
-<div class="thing comment id-${thing._fullname}">
+<div class="thing comment id-${thing._fullname} ${thing_css_rowclass(thing)}">
   %if c.profilepage:
     %if thing.link: 
       %if thing.link.title:
@@ -63,7 +63,14 @@
                    gray = collapse).render()}&#32;
      ${score(thing, thing.likes, tag='span')}&#32;
      ## thing.timesince is a cache stub
-     ${unsafe(_("%(timeago)s ago") % dict(timeago=thing.timesince))}&#32;
+     ${unsafe(_("%(timeago)s ago") % dict(timeago=thing.timesince))}
+     % if thing.gilded_message:
+       <span class="gilded-comment-icon" title="${thing.gilded_message}" data-count="${thing.gildings}">
+         % if thing.gildings > 1:
+           x${thing.gildings}
+         % endif
+       </span>
+     % endif
     </div>
     <a href="javascript:void(0)" class="options_link"></a>
     ${thing.usertext}

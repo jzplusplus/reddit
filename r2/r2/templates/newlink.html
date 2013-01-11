@@ -26,7 +26,7 @@
    from r2.lib.template_helpers import add_sr
 %>
 
-<%namespace file="utils.html" import="error_field, submit_form, _a_buffered, reddit_selector"/>
+<%namespace file="utils.html" import="error_field, submit_form, _a_buffered, reddit_selector, text_with_links"/>
 <%namespace name="utils" file="utils.html"/>
 
 <%
@@ -59,7 +59,7 @@ ${thing.formtabs_menu}
 
 <div class="spacer">
   <%utils:round_field title="${_('title')}" id="title-field">
-    <textarea name="title" rows="2" cols="1" wrap="hard">${thing.title}</textarea>
+    <textarea name="title" rows="2" required>${thing.title}</textarea>
     ${error_field("NO_TEXT", "title", "div")}
     ${error_field("TOO_LONG", "title", "div")}
   </%utils:round_field>
@@ -69,7 +69,7 @@ ${thing.formtabs_menu}
 <div class="spacer">
   <%utils:round_field title="${_('url')}" id="url-field">
     <input name="kind" value="link" type="hidden"/>
-    <input id="url" name="url" type="text" value="${thing.url}"/>
+    <input id="url" name="url" type="url" value="${thing.url}" required>
     ${error_field("NO_URL", "url", "div")}
     ${error_field("BAD_URL", "url", "div")}
     ${error_field("DOMAIN_BANNED", "url", "div")}
@@ -99,13 +99,27 @@ ${thing.formtabs_menu}
 
 <div class="spacer">
   <%utils:round_field title="${_('choose a subreddit')}" id="reddit-field">
-    ${reddit_selector(thing.default_sr.name if thing.default_sr else None, thing.sr_searches, thing.subreddits)}
+    ${reddit_selector(thing.default_sr.name if thing.default_sr else None, thing.sr_searches, thing.subreddits, required=True)}
   </%utils:round_field>
 </div>
 
 ${thing.captcha}
     
 </div>
+
+<div class="roundfield info-notice" title="${_('why a brick? read to the bottom of the rules page to find out!')}">
+  ${text_with_links(_("please be mindful of reddit's %(few_rules)s and practice %(good_reddiquette)s."),
+      few_rules=dict(
+        link_text=_("few rules"),
+        path="/rules",
+        target="_blank"),
+      good_reddiquette=dict(
+        link_text=_("good reddiquette"),
+        path="/help/reddiquette",
+        target="_blank"),
+  )}
+</div>
+
 <input name="resubmit" value="${thing.resubmit}" type="hidden"/>
 <div class="spacer">
   <button class="btn" name="submit" value="form" type="submit">${_("submit")}</button>

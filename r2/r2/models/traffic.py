@@ -19,6 +19,18 @@
 # All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
 # Inc. All Rights Reserved.
 ###############################################################################
+"""
+These models represent the traffic statistics stored for subreddits and
+promoted links.  They are written to by Pig-based MapReduce jobs and read from
+various places in the UI.
+
+All traffic statistics are divided up into three "intervals" of granularity,
+hourly, daily, and monthly.  Individual hits are tracked as pageviews /
+impressions, and can be safely summed.  Unique hits are tracked as well, but
+cannot be summed safely because there's no way to know overlap at this point in
+the data pipeline.
+
+"""
 
 import datetime
 
@@ -26,17 +38,17 @@ from pylons import g
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.schema import Column
-from sqlalchemy.types import DateTime, Integer, String, BigInteger
 from sqlalchemy.sql.expression import desc, distinct
 from sqlalchemy.sql.functions import sum
+from sqlalchemy.types import DateTime, Integer, String, BigInteger
 
-from r2.lib.utils import timedelta_by_name
-from r2.models.link import Link
 from r2.lib.memoize import memoize
+from r2.lib.utils import timedelta_by_name, tup
+from r2.models.link import Link
 
 
 engine = g.dbm.get_engine("traffic")
-Session = scoped_session(sessionmaker(bind=engine))
+Session = scoped_session(sessionmaker(bind=engine, autocommit=True))
 Base = declarative_base(bind=engine)
 
 
@@ -117,7 +129,7 @@ def zip_timeseries(*series, **kwargs):
         yield current_slice, tuple(data)
 
 
-def decrement_month(date, amount=1):
+def decrement_month(date):
     """Given a truncated datetime, return a new one one month in the past."""
 
     if date.day != 1:
@@ -127,34 +139,24 @@ def decrement_month(date, amount=1):
     return date.replace(day=1)
 
 
-def fill_gaps_generator(interval, start_time, stop_time, query, *columns):
+def fill_gaps_generator(time_points, query, *columns):
     """Generate a timeseries sequence with a value for every sample expected.
 
-    Iterate backwards in steps specified by interval from the most recent date
-    (stop_time) to the oldest (start_time) and pull the columns listed out of
-    query. If the query doesn't have data for a time slice, fill the gap with
+    Iterate over specified time points and pull the columns listed out of
+    query. If the query doesn't have data for a time point, fill the gap with
     an appropriate number of zeroes.
 
     """
 
     iterator = PeekableIterator(query)
-    step = timedelta_by_name(interval)
-    current_slice = stop_time
-
-    while current_slice > start_time:
+    for t in time_points:
         row = iterator.peek()
 
-        if row and row.date == current_slice:
-            yield current_slice, tuple(getattr(row, c) for c in columns)
+        if row and row.date == t:
+            yield t, tuple(getattr(row, c) for c in columns)
             iterator.next()
         else:
-            yield current_slice, tuple(0 for c in columns)
-
-        # moving backwards a month isn't a fixed timedelta -- special case it
-        if interval != "month":
-            current_slice -= step
-        else:
-            current_slice = decrement_month(current_slice)
+            yield t, tuple(0 for c in columns)
 
 
 def fill_gaps(*args, **kwargs):
@@ -168,27 +170,42 @@ time_range_by_interval = dict(hour=datetime.timedelta(days=4),
                               month=datetime.timedelta(weeks=52))
 
 
-def time_range(interval):
-    """Calculate the time range to view for a given level of precision.
+def get_time_points(interval, start_time=None, stop_time=None):
+    """Return time points for given interval type.
 
-    The coarser our granularity, the more history we'll want to see.
+    Time points are in reverse chronological order to match the sort of
+    queries this will be used with. If start_time and stop_time are not
+    specified they will be picked based on the interval.
 
     """
 
-    # the stop time is the most recent slice-time; get this by truncating
-    # the appropriate amount from the current time
-    stop_time = datetime.datetime.utcnow()
-    stop_time = stop_time.replace(minute=0, second=0, microsecond=0)
-    if interval in ("day", "month"):
-        stop_time = stop_time.replace(hour=0)
-    if interval == "month":
-        stop_time = stop_time.replace(day=1)
+    if start_time and stop_time:
+        start_time, stop_time = sorted([start_time, stop_time])
+    else:
+        # the stop time is the most recent slice-time; get this by truncating
+        # the appropriate amount from the current time
+        stop_time = datetime.datetime.utcnow()
+        stop_time = stop_time.replace(minute=0, second=0, microsecond=0)
+        if interval in ("day", "month"):
+            stop_time = stop_time.replace(hour=0)
+        if interval == "month":
+            stop_time = stop_time.replace(day=1)
 
-    # then the start time is easy to work out
-    range = time_range_by_interval[interval]
-    start_time = stop_time - range
+        # then the start time is easy to work out
+        range = time_range_by_interval[interval]
+        start_time = stop_time - range
 
-    return start_time, stop_time
+    step = timedelta_by_name(interval)
+    current_time = stop_time
+    time_points = []
+
+    while current_time >= start_time:
+        time_points.append(current_time)
+        if interval != 'month':
+            current_time -= step
+        else:
+            current_time = decrement_month(current_time)
+    return time_points
 
 
 def points_for_interval(interval):
@@ -201,9 +218,9 @@ def points_for_interval(interval):
 def make_history_query(cls, interval):
     """Build a generic query showing the history of a given aggregate."""
 
-    start_time, stop_time = time_range(interval)
+    time_points = get_time_points(interval)
     q = (Session.query(cls)
-                .filter(cls.date >= start_time))
+                .filter(cls.date.in_(time_points)))
 
     # subscription stats doesn't have an interval (it's only daily)
     if hasattr(cls, "interval"):
@@ -211,7 +228,7 @@ def make_history_query(cls, interval):
 
     q = q.order_by(desc(cls.date))
 
-    return start_time, stop_time, q
+    return time_points, q
 
 
 def top_last_month(cls, key):
@@ -221,6 +238,7 @@ def top_last_month(cls, key):
     therefore will be more meaningful.
 
     """
+
     cur_month = datetime.date.today().replace(day=1)
     last_month = decrement_month(cur_month)
 
@@ -241,23 +259,36 @@ def totals(cls, interval):
     effectively filters out all DART / 300x100 etc. traffic numbers.
 
     """
-    start_time, stop_time = time_range(interval)
+
+    time_points = get_time_points(interval)
+
     q = (Session.query(cls.date, sum(cls.pageview_count).label("sum"))
                 .filter(cls.interval == interval)
-                .filter(cls.date > start_time)
+                .filter(cls.date.in_(time_points))
                 .filter(cls.codename.startswith(Link._type_prefix))
                 .group_by(cls.date)
                 .order_by(desc(cls.date)))
-    return fill_gaps(interval, start_time, stop_time, q, "sum")
+    return fill_gaps(time_points, q, "sum")
+
+
+def total_by_codename(cls, codenames):
+    """Return total lifetime pageviews (or clicks) for given codename(s)."""
+    codenames = tup(codenames)
+    # uses hour totals to get the most up-to-date count
+    q = (Session.query(cls.codename, sum(cls.pageview_count))
+                       .filter(cls.interval == "hour")
+                       .filter(cls.codename.in_(codenames))
+                       .group_by(cls.codename))
+    return list(q)
 
 
 def promotion_history(cls, codename, start, stop):
     """Get hourly traffic for a self-serve promotion across all campaigns."""
+    time_points = get_time_points('hour', start, stop)
     q = (Session.query(cls)
                 .filter(cls.interval == "hour")
                 .filter(cls.codename == codename)
-                .filter(cls.date >= start)
-                .filter(cls.date <= stop)
+                .filter(cls.date.in_(time_points))
                 .order_by(cls.date))
     return [(r.date, (r.unique_count, r.pageview_count)) for r in q.all()]
 
@@ -272,6 +303,8 @@ def get_traffic_last_modified():
 
 
 class SitewidePageviews(Base):
+    """Pageviews across all areas of the site."""
+
     __tablename__ = "traffic_aggregate"
 
     date = Column(DateTime(), nullable=False, primary_key=True)
@@ -282,12 +315,13 @@ class SitewidePageviews(Base):
     @classmethod
     @memoize_traffic(time=3600)
     def history(cls, interval):
-        start_time, stop_time, q = make_history_query(cls, interval)
-        return fill_gaps(interval, start_time, stop_time, q,
-                         "unique_count", "pageview_count")
+        time_points, q = make_history_query(cls, interval)
+        return fill_gaps(time_points, q, "unique_count", "pageview_count")
 
 
 class PageviewsBySubreddit(Base):
+    """Pageviews within a subreddit (i.e. /r/something/...)."""
+
     __tablename__ = "traffic_subreddits"
 
     subreddit = Column(String(), nullable=False, primary_key=True)
@@ -299,10 +333,9 @@ class PageviewsBySubreddit(Base):
     @classmethod
     @memoize_traffic(time=3600)
     def history(cls, interval, subreddit):
-        start_time, stop_time, q = make_history_query(cls, interval)
+        time_points, q = make_history_query(cls, interval)
         q = q.filter(cls.subreddit == subreddit)
-        return fill_gaps(interval, start_time, stop_time, q,
-                         "unique_count", "pageview_count")
+        return fill_gaps(time_points, q, "unique_count", "pageview_count")
 
     @classmethod
     @memoize_traffic(time=3600 * 6)
@@ -311,6 +344,15 @@ class PageviewsBySubreddit(Base):
 
 
 class PageviewsBySubredditAndPath(Base):
+    """Pageviews within a subreddit with action included.
+
+    `srpath` is the subreddit name, a dash, then the controller method called
+    to render the page the user viewed. e.g. reddit.com-GET_listing. This is
+    useful to determine how many pageviews in a subreddit are on listing pages,
+    comment pages, or elsewhere.
+
+    """
+
     __tablename__ = "traffic_srpaths"
 
     srpath = Column(String(), nullable=False, primary_key=True)
@@ -321,6 +363,8 @@ class PageviewsBySubredditAndPath(Base):
 
 
 class PageviewsByLanguage(Base):
+    """Sitewide pageviews correlated by user's interface language."""
+
     __tablename__ = "traffic_lang"
 
     lang = Column(String(), nullable=False, primary_key=True)
@@ -332,10 +376,9 @@ class PageviewsByLanguage(Base):
     @classmethod
     @memoize_traffic(time=3600)
     def history(cls, interval, lang):
-        start_time, stop_time, q = make_history_query(cls, interval)
+        time_points, q = make_history_query(cls, interval)
         q = q.filter(cls.lang == lang)
-        return fill_gaps(interval, start_time, stop_time, q,
-                         "unique_count", "pageview_count")
+        return fill_gaps(time_points, q, "unique_count", "pageview_count")
 
     @classmethod
     @memoize_traffic(time=3600 * 6)
@@ -344,6 +387,8 @@ class PageviewsByLanguage(Base):
 
 
 class ClickthroughsByCodename(Base):
+    """Clickthrough counts for ads."""
+
     __tablename__ = "traffic_click"
 
     codename = Column("fullname", String(), nullable=False, primary_key=True)
@@ -355,10 +400,9 @@ class ClickthroughsByCodename(Base):
     @classmethod
     @memoize_traffic(time=3600)
     def history(cls, interval, codename):
-        start_time, stop_time, q = make_history_query(cls, interval)
+        time_points, q = make_history_query(cls, interval)
         q = q.filter(cls.codename == codename)
-        return fill_gaps(interval, start_time, stop_time, q, "unique_count",
-                                                             "pageview_count")
+        return fill_gaps(time_points, q, "unique_count", "pageview_count")
 
     @classmethod
     @memoize_traffic(time=3600)
@@ -370,8 +414,15 @@ class ClickthroughsByCodename(Base):
     def historical_totals(cls, interval):
         return totals(cls, interval)
 
+    @classmethod
+    @memoize_traffic(time=3600)
+    def total_by_codename(cls, codenames):
+        return total_by_codename(cls, codenames)
+
 
 class TargetedClickthroughsByCodename(Base):
+    """Clickthroughs for ads, correlated by ad campaign."""
+
     __tablename__ = "traffic_clicktarget"
 
     codename = Column("fullname", String(), nullable=False, primary_key=True)
@@ -381,8 +432,15 @@ class TargetedClickthroughsByCodename(Base):
     unique_count = Column("unique", Integer())
     pageview_count = Column("total", Integer())
 
+    @classmethod
+    @memoize_traffic(time=3600)
+    def total_by_codename(cls, codenames):
+        return total_by_codename(cls, codenames)
+
 
 class AdImpressionsByCodename(Base):
+    """Impressions for ads."""
+
     __tablename__ = "traffic_thing"
 
     codename = Column("fullname", String(), nullable=False, primary_key=True)
@@ -394,10 +452,9 @@ class AdImpressionsByCodename(Base):
     @classmethod
     @memoize_traffic(time=3600)
     def history(cls, interval, codename):
-        start_time, stop_time, q = make_history_query(cls, interval)
+        time_points, q = make_history_query(cls, interval)
         q = q.filter(cls.codename == codename)
-        return fill_gaps(interval, start_time, stop_time, q,
-                         "unique_count", "pageview_count")
+        return fill_gaps(time_points, q, "unique_count", "pageview_count")
 
     @classmethod
     @memoize_traffic(time=3600)
@@ -421,15 +478,23 @@ class AdImpressionsByCodename(Base):
 
         The 300x100 ads get a codename that looks like "fullname_campaign".
         This function gets a list of recent campaigns.
+
         """
-        start_time, stop_time = time_range("day")
+        time_points = get_time_points('day')
         query = (Session.query(distinct(cls.codename).label("codename"))
-                        .filter(cls.date > start_time)
+                        .filter(cls.date.in_(time_points))
                         .filter(cls.codename.startswith(fullname)))
         return [row.codename for row in query]
 
+    @classmethod
+    @memoize_traffic(time=3600)
+    def total_by_codename(cls, codename):
+        return total_by_codename(cls, codename)
+
 
 class TargetedImpressionsByCodename(Base):
+    """Impressions for ads, correlated by ad campaign."""
+
     __tablename__ = "traffic_thingtarget"
 
     codename = Column("fullname", String(), nullable=False, primary_key=True)
@@ -439,8 +504,22 @@ class TargetedImpressionsByCodename(Base):
     unique_count = Column("unique", Integer())
     pageview_count = Column("total", Integer())
 
+    @classmethod
+    @memoize_traffic(time=3600)
+    def total_by_codename(cls, codenames):
+        return total_by_codename(cls, codenames)
+
 
 class SubscriptionsBySubreddit(Base):
+    """Subscription statistics for subreddits.
+
+    This table is different from the rest of the traffic ones.  It only
+    contains data at a daily interval (hence no `interval` column) and is
+    updated separately in the subscribers cron job (see
+    reddit-job-subscribers).
+
+    """
+
     __tablename__ = "traffic_subscriptions"
 
     subreddit = Column(String(), nullable=False, primary_key=True)
@@ -450,10 +529,10 @@ class SubscriptionsBySubreddit(Base):
     @classmethod
     @memoize_traffic(time=3600 * 6)
     def history(cls, interval, subreddit):
-        start_time, stop_time, q = make_history_query(cls, interval)
+        time_points, q = make_history_query(cls, interval)
         q = q.filter(cls.subreddit == subreddit)
-        return fill_gaps(interval, start_time, stop_time, q,
-                         "subscriber_count")
+        return fill_gaps(time_points, q, "subscriber_count")
+
 
 # create the tables if they don't exist
 if g.db_create_tables:

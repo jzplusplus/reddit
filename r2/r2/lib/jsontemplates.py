@@ -26,7 +26,8 @@ from utils import to36, tup, iters
 from wrapped import Wrapped, StringTemplate, CacheStub, CachedVariable, Templated
 from mako.template import Template
 from r2.config.extensions import get_api_subtype
-from r2.lib.filters import spaceCompress, safemarkdown
+from r2.lib.filters import spaceCompress, safemarkdown, wikimarkdown
+from r2.models.subreddit import SubSR
 import time, pytz
 from pylons import c, g
 from pylons.i18n import _
@@ -155,8 +156,12 @@ class ThingJsonTemplate(JsonTemplate):
         things).
         """
         if attr == "author":
+            if thing.author._deleted:
+                return "[deleted]"
             return thing.author.name
         if attr == "author_flair_text":
+            if thing.author._deleted:
+                return None
             if thing.author.flair_enabled_in_sr(thing.subreddit._id):
                 return getattr(thing.author,
                                'flair_%s_text' % (thing.subreddit._id),
@@ -164,6 +169,8 @@ class ThingJsonTemplate(JsonTemplate):
             else:
                 return None
         if attr == "author_flair_css_class":
+            if thing.author._deleted:
+                return None
             if thing.author.flair_enabled_in_sr(thing.subreddit._id):
                 return getattr(thing.author,
                                'flair_%s_css_class' % (thing.subreddit._id),
@@ -206,6 +213,7 @@ class SubredditJsonTemplate(ThingJsonTemplate):
                                                 url          = "path",
                                                 over18       = "over_18",
                                                 description  = "description",
+                                                description_html = "description_html",
                                                 public_description = "public_description",
                                                 display_name = "name",
                                                 header_img   = "header",
@@ -219,6 +227,11 @@ class SubredditJsonTemplate(ThingJsonTemplate):
         if (attr == "_ups" and g.lounge_reddit
             and thing.name == g.lounge_reddit):
             return 0
+        # Don't return accounts_active counts in /reddits
+        elif (attr == "accounts_active" and isinstance(c.site, SubSR)):
+            return None
+        elif attr == 'description_html':
+            return safemarkdown(thing.description)
         else:
             return ThingJsonTemplate.thing_attr(self, thing, attr)
 
@@ -226,17 +239,25 @@ class IdentityJsonTemplate(ThingJsonTemplate):
     _data_attrs_ = ThingJsonTemplate.data_attrs(name = "name",
                                                 link_karma = "safe_karma",
                                                 comment_karma = "comment_karma",
-                                                is_gold = "gold"
+                                                is_gold = "gold",
+                                                is_mod = "is_mod",
                                                 )
+
+    def thing_attr(self, thing, attr):
+        from r2.models import Subreddit
+        if attr == "is_mod":
+            t = thing.lookups[0] if isinstance(thing, Wrapped) else thing
+            return bool(Subreddit.reverse_moderator_ids(t))
+        return ThingJsonTemplate.thing_attr(self, thing, attr)
 
 class AccountJsonTemplate(IdentityJsonTemplate):
     _data_attrs_ = IdentityJsonTemplate.data_attrs(has_mail = "has_mail",
                                                   has_mod_mail = "has_mod_mail",
                                                   is_mod = "is_mod",
+                                                  is_friend = "is_friend",
                                                   )
 
     def thing_attr(self, thing, attr):
-        from r2.models import Subreddit
         if attr == "has_mail":
             if c.user_is_loggedin and thing._id == c.user._id:
                 return bool(c.have_messages)
@@ -245,9 +266,9 @@ class AccountJsonTemplate(IdentityJsonTemplate):
             if c.user_is_loggedin and thing._id == c.user._id:
                 return bool(c.have_mod_messages)
             return None
-        if attr == "is_mod":
-            return bool(Subreddit.reverse_moderator_ids(thing))
-        return ThingJsonTemplate.thing_attr(self, thing, attr)
+        if attr == "is_friend":
+            return c.user_is_loggedin and thing._id in c.user.friends
+        return IdentityJsonTemplate.thing_attr(self, thing, attr)
 
     def raw_data(self, thing):
         data = ThingJsonTemplate.raw_data(self, thing)
@@ -352,7 +373,8 @@ class CommentJsonTemplate(ThingJsonTemplate):
                                                 banned_by    = "banned_by",
                                                 approved_by  = "approved_by",
                                                 parent_id    = "parent_id",
-                                                edited       = "editted"
+                                                edited       = "editted",
+                                                gilded       = "gilded",
                                                 )
 
     def thing_attr(self, thing, attr):
@@ -373,6 +395,8 @@ class CommentJsonTemplate(ThingJsonTemplate):
                 return make_fullname(Link, thing.link_id)
         elif attr == "body_html":
             return spaceCompress(safemarkdown(thing.body))
+        elif attr == "gilded":
+            return thing.gildings
         return ThingJsonTemplate.thing_attr(self, thing, attr)
 
     def kind(self, wrapped):
@@ -397,7 +421,9 @@ class CommentJsonTemplate(ThingJsonTemplate):
 class MoreCommentJsonTemplate(CommentJsonTemplate):
     _data_attrs_ = dict(id           = "_id36",
                         name         = "_fullname",
-                        children     = "children")
+                        children     = "children",
+                        count        = "count",
+                        parent_id    = "parent_id")
 
     def kind(self, wrapped):
         return "more"
@@ -514,7 +540,7 @@ class UserListJsonTemplate(ThingJsonTemplate):
     def thing_attr(self, thing, attr):
         if attr == "users":
             res = []
-            for a in thing.users:
+            for a in thing.user_rows:
                 r = a.render()
                 res.append(r)
             return res
@@ -558,24 +584,52 @@ class TrafficJsonTemplate(JsonTemplate):
 class WikiJsonTemplate(JsonTemplate):
     def render(self, thing, *a, **kw):
         try:
-            content = thing.content
+            content = thing.inner_content
         except AttributeError:
-            content = thing.revisions
+            content = thing.listing
         return ObjectTemplate(content.render() if thing else {})
 
+class WikiPageListingJsonTemplate(ThingJsonTemplate):
+    def kind(self, thing):
+        return "wikipagelisting"
+    
+    def data(self, thing):
+        pages = [p.name for p in thing.linear_pages]
+        return pages
+
 class WikiViewJsonTemplate(ThingJsonTemplate):
-    def render(self, thing, *a, **kw):
-        edit_date = time.mktime(thing.edit_date.timetuple())
-        return ObjectTemplate(dict(content_md=thing.page_content_md,
-                                   content_html=thing.page_content,
-                                   revision_by=thing.edit_by,
-                                   revision_date=edit_date,
-                                   may_revise=thing.may_revise))
+    def kind(self, thing):
+        return "wikipage"
+    
+    def data(self, thing):
+        edit_date = time.mktime(thing.edit_date.timetuple()) if thing.edit_date else None
+        edit_by = None
+        if thing.edit_by and not thing.edit_by._deleted:
+             edit_by = Wrapped(thing.edit_by).render()
+        return dict(content_md=thing.page_content_md,
+                    content_html=wikimarkdown(thing.page_content_md),
+                    revision_by=edit_by,
+                    revision_date=edit_date,
+                    may_revise=thing.may_revise)
+
+class WikiSettingsJsonTemplate(ThingJsonTemplate):
+     def kind(self, thing):
+         return "wikipagesettings"
+    
+     def data(self, thing):
+         editors = [Wrapped(e).render() for e in thing.mayedit]
+         return dict(permlevel=thing.permlevel,
+                     editors=editors)
 
 class WikiRevisionJsonTemplate(ThingJsonTemplate):
     def render(self, thing, *a, **kw):
-        timestamp = time.mktime(thing.date.timetuple())
-        return ObjectTemplate(dict(author=thing._get('author'),
+        timestamp = time.mktime(thing.date.timetuple()) if thing.date else None
+        author = thing.get_author()
+        if author and not author._deleted:
+            author = Wrapped(author).render()
+        else:
+            author = None
+        return ObjectTemplate(dict(author=author,
                                    id=str(thing._id),
                                    timestamp=timestamp,
                                    reason=thing._get('reason'),
@@ -659,3 +713,14 @@ class SubredditSettingsTemplate(ThingJsonTemplate):
         if attr.startswith('site.') and thing.site:
             return getattr(thing.site, attr[5:])
         return ThingJsonTemplate.thing_attr(self, thing, attr)
+
+class ModActionTemplate(ThingJsonTemplate):
+    _data_attrs_ = dict(sr_id36='sr_id36',
+                        mod_id36='mod_id36',
+                        action='action',
+                        details='details',
+                        description='description',
+                        target_fullname='target_fullname')
+
+    def kind(self, wrapped):
+        return 'modaction'

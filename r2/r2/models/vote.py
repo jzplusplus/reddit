@@ -90,7 +90,7 @@ class CommentVotesByAccount(VotesByAccount):
 
 class VoteDetailsByThing(tdb_cassandra.View):
     _use_db = False
-    _ttl = 60 * 60 * 24 * 30
+    _ttl = timedelta(days=90)
     _fetch_all_columns = True
     _extra_schema_creation_args = dict(key_validation_class=ASCII_TYPE,
                                        default_validation_class=UTF8_TYPE)
@@ -122,7 +122,10 @@ class VoteDetailsByThing(tdb_cassandra.View):
         else:
             raise ValueError
 
-        raw_details = details_cls._byID(thing._id36)._values()
+        try:
+            raw_details = details_cls._byID(thing._id36)._values()
+        except tdb_cassandra.NotFound:
+            raw_details = {}
         details = []
         for key, value in raw_details.iteritems():
             data = Storage(json.loads(value))

@@ -53,12 +53,13 @@ def load_environment(global_conf={}, app_conf={}, setup_globals=True):
                     template_engine='mako', paths=paths)
 
     g = config['pylons.g'] = Globals(global_conf, app_conf, paths)
-    g.plugins.declare_queues(g.queues)
     if setup_globals:
         g.setup()
+        g.plugins.declare_queues(g.queues)
         r2.config.cache = g.cache
     g.plugins.load_plugins()
     config['r2.plugins'] = g.plugins
+    g.startup_timer.intermediate("plugins")
 
     config['pylons.h'] = r2.lib.helpers
     config['routes.map'] = routing.make_map()
@@ -67,10 +68,6 @@ def load_environment(global_conf={}, app_conf={}, setup_globals=True):
     config['pylons.response_options']['headers'] = {}
 
     # The following template options are passed to your template engines
-    #tmpl_options = {}
-    #tmpl_options['myghty.log_errors'] = True
-    #tmpl_options['myghty.escapes'] = dict(l=webhelpers.auto_link, s=webhelpers.simple_format)
-
     tmpl_options = config['buffet.template_options']
     tmpl_options['mako.filesystem_checks'] = getattr(g, 'reload_templates', False)
     tmpl_options['mako.default_filters'] = ["mako_websafe"]
@@ -93,9 +90,5 @@ def load_environment(global_conf={}, app_conf={}, setup_globals=True):
 
     tmpl_options['mako.modulename_callable'] = mako_module_path
 
-    # Add your own template options config options here,
-    # note that all config options will override
-    # any Pylons config options
-
-    # Return our loaded config object
-    #return config.Config(tmpl_options, map, paths)
+    if setup_globals:
+        g.setup_complete()

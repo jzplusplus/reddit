@@ -57,6 +57,11 @@ class AdminTools(object):
 
             t._spam = True
 
+            if moderator_banned:
+                t.verdict = 'mod-removed'
+            elif not auto:
+                t.verdict = 'admin-removed'
+
             ban_info = copy(getattr(t, 'ban_info', {}))
             if isinstance(banner, dict):
                 ban_info['banner'] = banner[t._fullname]
@@ -77,7 +82,8 @@ class AdminTools(object):
 
         queries.ban(all_things, filtered=auto)
 
-    def unspam(self, things, unbanner=None, train_spam=True, insert=True):
+    def unspam(self, things, moderator_unbanned=True, unbanner=None,
+               train_spam=True, insert=True):
         from r2.lib.db import queries
 
         things = tup(things)
@@ -105,6 +111,10 @@ class AdminTools(object):
                 ban_info['reset_used'] = True
             t.ban_info = ban_info
             t._spam = False
+            if moderator_unbanned:
+                t.verdict = 'mod-approved'
+            else:
+                t.verdict = 'admin-approved'
             t._commit()
 
         self.author_spammer(things, False)
@@ -131,47 +141,6 @@ class AdminTools(object):
             for aid, author_things in by_aid.iteritems():
                 author = authors[aid]
                 author._incr('spammer', len(author_things) if spam else -len(author_things))
-
-
-    def email_attrs(self, account_ids, return_dict=True):
-        account_ids, single = tup(account_ids, True)
-
-        accounts = Account._byID(account_ids, data=True, return_dict=False)
-
-        rv = {}
-        canons = {}
-        aids_by_canon = {} # sounds terrifying
-
-        for a in accounts:
-            attrs = []
-            rv[a._id] = attrs
-
-            if not getattr(a, "email", None):
-                attrs.append(("gray", "no email specified", "X"))
-            else:
-                canon = a.canonical_email()
-                aids_by_canon.setdefault(canon, [])
-                aids_by_canon[canon].append(a._id)
-
-                verify_str = "verified email: " + canon
-                if getattr(a, "email_verified", None):
-                    attrs.append(("green", verify_str, "V"))
-                else:
-                    attrs.append(("gray", "un" + verify_str, "@"))
-
-        ban_reasons = Account.which_emails_are_banned(aids_by_canon.keys())
-
-        for canon, ban_reason in ban_reasons.iteritems():
-            if ban_reason:
-                for aid in aids_by_canon[canon]:
-                    rv[aid].append(("wrong", "banned email " + ban_reason, "B"))
-
-        if single:
-            return rv[account_ids[0]]
-        elif return_dict:
-            return rv
-        else:
-            return filter(None, (rv.get(i) for i in account_ids))
 
     def set_last_sr_ban(self, things):
         by_srid = {}
@@ -209,10 +178,6 @@ class AdminTools(object):
 
         account.friend_rels_cache(_update=True)
 
-        if g.lounge_reddit:
-            sr = Subreddit._by_name(g.lounge_reddit)
-            sr.add_contributor(account)
-
     def degolden(self, account, severe=False):
 
         if severe:
@@ -222,10 +187,6 @@ class AdminTools(object):
         Award.take_away("reddit_gold", account)
         account.gold = False
         account._commit()
-
-        if g.lounge_reddit and not getattr(account, "gold_charter", False):
-            sr = Subreddit._by_name(g.lounge_reddit)
-            sr.remove_contributor(account)
 
     def admin_list(self):
         return list(g.admins)
@@ -359,10 +320,6 @@ def ip_span(ip):
     return '<!-- %s -->' % ip
 
 def filter_quotas(unfiltered):
-    from r2.lib.utils.trial_utils import trial_info
-
-    trials = trial_info(unfiltered)
-
     now = datetime.now(g.tz)
 
     baskets = {
@@ -398,9 +355,7 @@ def filter_quotas(unfiltered):
             'admin-approved', 'mod-approved')
 
         # Then, make sure it's worthy of quota-clogging
-        if trials.get(item._fullname):
-            pass
-        elif item._spam:
+        if item._spam:
             pass
         elif item._deleted:
             pass
@@ -422,6 +377,24 @@ def filter_quotas(unfiltered):
 
 def check_request(end_time):
     pass
+
+
+def send_system_message(user, subject, body):
+    from r2.lib.db import queries
+
+    system_user = Account.system_user()
+    if not system_user:
+        g.log.warning("g.system_user isn't set properly. Can't send system message.")
+        return
+
+    item, inbox_rel = Message._new(system_user, user, subject, body,
+                                   ip='0.0.0.0')
+    item.distinguished = 'admin'
+    item.repliable = False
+    item._commit()
+
+    queries.new_message(item, inbox_rel)
+
 
 try:
     from r2admin.models.admintools import *

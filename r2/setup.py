@@ -90,18 +90,15 @@ setup(
         "PIL",
         "pycaptcha",
         "amqplib",
-        "pylibmc==1.2.1-dev",
+        "pylibmc>=1.2.1",
         "py-bcrypt",
-        "python-statsd",
         "snudown>=1.1.0",
-        "l2cs",
+        "l2cs>=2.0.2",
         "lxml",
         "kazoo",
     ],
     dependency_links=[
-        "https://github.com/downloads/reddit/pylibmc/pylibmc-1.2.1-dev.tar.gz#egg=pylibmc-1.2.1-dev",
         "https://nodeload.github.com/reddit/snudown/tarball/v1.1.0#egg=snudown-1.1.0",
-        "https://nodeload.github.com/reddit/pycassa/zipball/master#egg=pycassa-1.7.0",
     ],
     packages=find_packages(exclude=["ez_setup"]),
     cmdclass=commands,
@@ -116,12 +113,8 @@ setup(
     entry_points="""
     [paste.app_factory]
     main=r2:make_app
-    [paste.app_install]
-    main=pylons.util:PylonsInstaller
     [paste.paster_command]
     run = r2.commands:RunCommand
     shell = pylons.commands:ShellCommand
-    controller = pylons.commands:ControllerCommand
-    restcontroller = pylons.commands:RestControllerCommand
     """,
 )

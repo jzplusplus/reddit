@@ -24,18 +24,13 @@
 
 <%!
    from r2.lib.strings import strings
-   from r2.lib.promote import STATUS
+   from r2.models.promo import PROMOTE_STATUS
  %>
 
 <%def name="banbuttons()">
   %if thing.show_delete:
     <li>
       ${ynbutton(_("delete"), _("deleted"), "del", "hide_thing")}
-    </li>
-  %endif
-  %if thing.show_indict:
-    <li>
-      ${ynbutton(_("indict"), _("indicted"), "indict")}
     </li>
   %endif
   %if thing.can_ban:
@@ -227,7 +222,7 @@
                          _("reject"), _("cancel"), \
                          "reject_promo", "cancel_reject_promo")}
        </li>
-      %if thing.promote_status in (STATUS.unseen, STATUS.rejected):
+      %if thing.promote_status in (PROMOTE_STATUS.unseen, PROMOTE_STATUS.rejected):
         <li>
           ${ynbutton(_("accept"), _("accepted"), "promote")}
         </li>
@@ -238,24 +233,6 @@
         ${plain_link(_("traffic"), thing.traffic_url, _sr_path = False)}
       </li>
     %endif
-  %endif
-
-  %if getattr(thing.thing, "reveal_trial_info", False):
-   <li class="rounded trial-stamp stamp"
-       title='${_('questionable submission; you should remove it or approve it')}'
-       >
-     ${_("deputy opinion:")}
-     &#32;
-     <span class="spam">
-       ${_("%d spam") % thing.thing.trial_info.get("spams", "?")}
-     </span>
-     &#32;
-     /
-     &#32;
-     <span class="kosher">
-       ${_("%d kosher") % thing.thing.trial_info.get("koshers", "?")}
-     </span>
-   </li>
   %endif
 
   %if thing.show_reports and not thing.show_spam:
@@ -274,6 +251,17 @@
   <li class="first">
     ${self.bylink_button(_("permalink"), thing.permalink)}
   </li>
+  %if thing.saved:
+    <li class="comment-unsave-button">
+       ${self.state_button("unsave", _("unsave"), \
+         "return change_state(this, 'unsave', unsave_thing);", _("unsaved"))}
+    </li>
+  %else:
+    <li class="comment-save-button">
+       ${self.state_button("save", _("save"), \
+         "return change_state(this, 'save', save_thing);", _("saved"))}
+    </li>
+  %endif
   %if c.profilepage:
     <li>
       ${self.bylink_button(_("context"), thing.permalink + "?context=3")}
@@ -307,6 +295,14 @@
     %endif
     ${self.banbuttons()}
     ${self.distinguish()}
+    % if thing.can_gild:
+      <li>
+      <a href="/gold?goldtype=gift&months=1&comment=${thing.thing._fullname}"
+          title="${_("give reddit gold in appreciation of this comment.")}"
+          class="give-gold login-required"
+          >${_("give gold")}</a>
+      </li>
+    % endif
     %if not thing.profilepage and thing.can_reply:
       <li>
         ${self.simple_button(_("reply {verb}"), "reply")}

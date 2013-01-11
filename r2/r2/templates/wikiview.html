@@ -22,6 +22,10 @@
 
 <%namespace file="utils.html" import="timestamp"/>
 
+<%!
+    from r2.lib.filters import wikimarkdown
+    from r2.lib.pages import WrappedUser
+%>
 
 %if thing.diff:
     <p>
@@ -29,16 +33,19 @@
     </p>
 %endif
 <p>
-    %if not thing.page_content:
+    %if not thing.page_content_md:
         <em>${_("this page is empty")}</em>
     %else:
-        ${unsafe(thing.page_content)}
+        ${unsafe(wikimarkdown(thing.page_content_md))}
     %endif
 </p>
 %if thing.edit_date:
     <hr/>
     <em>
-        ${_("revision by %s") % thing.edit_by}
-        &mdash;&nbsp;${timestamp(thing.edit_date)}&nbsp;ago
+        %if thing.edit_by:
+             ${unsafe(_("revision by&nbsp;%s") % WrappedUser(thing.edit_by).render())}
+             &mdash;&nbsp;
+        %endif
+        ${unsafe("%(time)s&nbsp;ago" % dict(time=timestamp(thing.edit_date)))}
     </em>
 %endif

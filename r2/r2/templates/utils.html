@@ -26,7 +26,7 @@
    from r2.lib.filters import spaceCompress, unsafe, safemarkdown
    from r2.lib.template_helpers import add_sr, js_config, static, html_datetime
    from r2.lib.utils import cols, long_datetime, timesince
-   from r2.lib.tracking import UserInfo
+   from r2.lib import tracking
    from datetime import datetime
 %>
 <%def name="tags(**kw)">
@@ -53,9 +53,7 @@
 id="${arg}_${thing and thing._fullname or ''}"
 </%def>
 
-<%def name="css_class(thing)">
-${' '+thing.css_class if hasattr(thing, 'css_class') and thing.css_class else ''}
-</%def>
+<%def name="css_class(thing)">${' '+thing.css_class if hasattr(thing, 'css_class') and thing.css_class else ''}</%def>
 
 <%def name="submit_form(onsubmit='', action='', _class='', method='post', _id='', **params)">
 <form class="${_class or ''}" onsubmit="${onsubmit or ''}" 
@@ -407,9 +405,9 @@ ${unsafe(txt)}
 </%def>
 
 
-<%def name="js_setup()">
+<%def name="js_setup(extra_config=None)">
   <script type="text/javascript" id="config">
-    r.setup(${unsafe(json.dumps(js_config()))})
+    r.setup(${unsafe(json.dumps(js_config(extra_config)))})
   </script>
 </%def>
 
@@ -420,9 +418,9 @@ ${unsafe(txt)}
     var _gaq = _gaq || [];
     _gaq.push(
         ['_setAccount', '${g.googleanalytics}'],
-        ['_setCustomVar', 1, 'site', '${UserInfo.get_site()}', 3],
-        ['_setCustomVar', 2, 'srpath', '${UserInfo.get_srpath()}', 3],
-        ['_setCustomVar', 3, 'usertype', '${UserInfo.get_usertype()}', 2],
+        ['_setCustomVar', 1, 'site', '${tracking.get_site()}', 3],
+        ['_setCustomVar', 2, 'srpath', '${tracking.get_srpath()}', 3],
+        ['_setCustomVar', 3, 'usertype', '${"loggedin" if c.user_is_loggedin else "guest"}', 2],
         ['_setCustomVar', 4, 'uitype', '${uitype}', 3],
         ['_trackPageview']
     );
@@ -523,14 +521,23 @@ ${unsafe(txt)}
   </tr>
 </%def>
 
-<%def name="reddit_selector(default_sr, sr_searches, subreddits)">
+<%def name="reddit_selector(default_sr, sr_searches, subreddits, required=False)">
+    <%doc>
+      Fires custom event when subreddit selection changes. Add handler like:
+      $("#sr-autocomplete").bind("sr-changed", function() { dostuff; })
+    </%doc>
+
     <div id="sr-autocomplete-area">
       <input id="sr-autocomplete" name="sr" type="text"
              autocomplete="off"
              onkeyup="sr_name_up(event)"
              onkeydown="return sr_name_down(event)"
              onblur="hide_sr_name_list()"
-             value = "${default_sr}" />
+             value = "${default_sr}"
+             % if required:
+             required
+             % endif
+             />
       <ul id="sr-drop-down">
         <li class="sr-name-row"
             onmouseover="highlight_reddit(this)"
@@ -601,6 +608,10 @@ ${unsafe(txt)}
   %endif
 </%def>
 
+<%def name="md(text, wrap=False)">
+  ${unsafe(safemarkdown(text, wrap=wrap))}
+</%def>
+
 <%def name="_md(text, wrap=False)">
-  ${unsafe(safemarkdown(_(text), wrap=wrap))}
+  ${md(_(text), wrap=wrap)}
 </%def>

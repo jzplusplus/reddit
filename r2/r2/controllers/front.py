@@ -20,8 +20,8 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
-from validator import *
 from pylons.i18n import _, ungettext
+from pylons.controllers.util import redirect_to
 from reddit_base import RedditController, base_listing, paginated_listing, prevent_framing_and_css
 from r2 import config
 from r2.models import *
@@ -32,9 +32,8 @@ from r2.lib.pages import trafficpages
 from r2.lib.menus import *
 from r2.lib.utils import to36, sanitize_url, check_cheating, title_to_url
 from r2.lib.utils import query_string, UrlParser, link_from_url, link_duplicates
-from r2.lib.utils import randstr
 from r2.lib.template_helpers import get_domain
-from r2.lib.filters import unsafe, _force_unicode
+from r2.lib.filters import unsafe, _force_unicode, _force_utf8
 from r2.lib.emailer import has_opted_out, Email
 from r2.lib.db.operators import desc
 from r2.lib.db import queries
@@ -42,14 +41,17 @@ from r2.lib.db.tdb_cassandra import MultiColumnQuery
 from r2.lib.strings import strings
 from r2.lib.search import (SearchQuery, SubredditSearchQuery, SearchException,
                            InvalidQuery)
+from r2.lib.validator import *
 from r2.lib import jsontemplates
 from r2.lib import sup
 import r2.lib.db.thing as thing
-from errors import errors
+from r2.lib.errors import errors
 from listingcontroller import ListingController
+from oauth2 import OAuth2ResourceController, require_oauth2_scope
 from api_docs import api_doc, api_section
-from pylons import c, request, request, Response
+from pylons import c, request, response
 from r2.models.token import EmailVerificationToken
+from r2.controllers.ipn import generate_blob
 
 from operator import attrgetter
 import string
@@ -58,9 +60,13 @@ import re, socket
 import time as time_module
 from urllib import quote_plus
 
-class FrontController(RedditController):
+class FrontController(RedditController, OAuth2ResourceController):
 
     allow_stylesheets = True
+
+    def pre(self):
+        self.check_for_bearer_token()
+        RedditController.pre(self)
 
     @validate(article = VLink('article'),
               comment = VCommentID('comment'))
@@ -195,6 +201,7 @@ class FrontController(RedditController):
         # point. Now just redirect to GET mode.
         return self.redirect(request.fullpath + query_string(dict(sort=sort)))
 
+    @require_oauth2_scope("read")
     @validate(article      = VLink('article'),
               comment      = VCommentID('comment'),
               context      = VInt('context', min = 0, max = 8),
@@ -299,7 +306,7 @@ class FrontController(RedditController):
             display = False
             if not comment:
                 age = c.start_time - article._date
-                if age.days < g.REPLY_AGE_LIMIT:
+                if article.promoted or age.days < g.REPLY_AGE_LIMIT:
                     display = True
             displayPane.append(UserText(item = article, creating = True,
                                         post_form = 'comment',
@@ -384,20 +391,34 @@ class FrontController(RedditController):
         return res
 
     def GET_stylesheet(self):
+        if g.css_killswitch:
+            self.abort404()
+
         # de-stale the subreddit object so we don't poison nginx's cache
         if not isinstance(c.site, FakeSubreddit):
             c.site = Subreddit._byID(c.site._id, data=True, stale=False)
 
-        if hasattr(c.site,'stylesheet_contents') and not g.css_killswitch:
+        if c.site.stylesheet_is_static:
+            # TODO: X-Private-Subreddit?
+            return redirect_to(c.site.stylesheet_url)
+        else:
+            stylesheet_contents = c.site.stylesheet_contents
+
+        if stylesheet_contents:
             c.allow_loggedin_cache = True
-            self.check_modified(c.site,'stylesheet_contents',
-                                private=False, max_age=7*24*60*60,
-                                must_revalidate=False)
-            c.response_content_type = 'text/css'
-            c.response.content =  c.site.stylesheet_contents
+
+            if c.site.stylesheet_modified:
+                self.abort_if_not_modified(
+                    c.site.stylesheet_modified,
+                    private=False,
+                    max_age=timedelta(days=7),
+                    must_revalidate=False,
+                )
+
+            response.content_type = 'text/css'
             if c.site.type == 'private':
-                c.response.headers['X-Private-Subreddit'] = 'private'
-            return c.response
+                response.headers['X-Private-Subreddit'] = 'private'
+            return stylesheet_contents
         else:
             return self.abort404()
 
@@ -420,6 +441,7 @@ class FrontController(RedditController):
         pane = listing.listing()
         return pane
 
+    @require_oauth2_scope("modlog")
     @prevent_framing_and_css(allow_cname_frame=True)
     @paginated_listing(max_page_size=500, backend='cassandra')
     @validate(mod=nop('mod'),
@@ -480,9 +502,6 @@ class FrontController(RedditController):
             query = c.site.get_reported()
         elif location == 'spam':
             query = c.site.get_spam()
-        elif location == 'trials':
-            query = c.site.get_trials()
-            num = 1000
         elif location == 'modqueue':
             query = c.site.get_modqueue()
         elif location == 'unmoderated':
@@ -499,26 +518,26 @@ class FrontController(RedditController):
 
         def keep_fn(x):
             # no need to bother mods with banned users, or deleted content
-            if getattr(x,'hidden',False) or x._deleted:
+            if x._deleted:
+                return False
+            if getattr(x,'author',None) == c.user and c.user._spam:
                 return False
 
             if location == "reports":
                 return x.reported > 0 and not x._spam
             elif location == "spam":
                 return x._spam
-            elif location == "trials":
-                return not getattr(x, "verdict", None)
             elif location == "modqueue":
                 if x.reported > 0 and not x._spam:
                     return True # reported but not banned
                 verdict = getattr(x, "verdict", None)
                 if verdict is None:
-                    return True # anything without a verdict (i.e., trials)
+                    return True # anything without a verdict
                 if x._spam and verdict != 'mod-removed':
                     return True # spam, unless banned by a moderator
                 return False
             elif location == "unmoderated":
-                return True
+                return not getattr(x, 'verdict', None)
             else:
                 raise ValueError
 
@@ -552,11 +571,8 @@ class FrontController(RedditController):
         else:
             raise ValueError
 
-        if ((level == 'mod' and
-             location in ('reports', 'spam', 'trials', 'modqueue', 'unmoderated'))
-            or
-            (level == 'all' and
-             location == 'trials')):
+        if (level == 'mod' and
+            location in ('reports', 'spam', 'modqueue', 'unmoderated')):
             pane = self._make_spamlisting(location, num, after, reverse, count)
             if c.user.pref_private_feeds:
                 extension_handling = "private"
@@ -606,7 +622,13 @@ class FrontController(RedditController):
             c.allow_styles = True
             pane = SubredditStylesheet(site = c.site,
                                        stylesheet_contents = stylesheet_contents)
-        elif (location in ('reports', 'spam', 'trials', 'modqueue', 'unmoderated')
+        elif (location == 'stylesheet'
+              and c.site.can_view(c.user)
+              and not g.css_killswitch):
+            stylesheet = (c.site.stylesheet_contents_user or
+                          c.site.stylesheet_contents)
+            pane = SubredditStylesheetSource(stylesheet_contents=stylesheet)
+        elif (location in ('reports', 'spam', 'modqueue', 'unmoderated')
               and is_moderator):
             c.allow_styles = True
             pane = self._make_spamlisting(location, num, after, reverse, count)
@@ -624,7 +646,10 @@ class FrontController(RedditController):
         else:
             return self.abort404()
 
+        is_wiki_action = location in ['wikibanned', 'wikicontributors']
+
         return EditReddit(content=pane,
+                          show_wiki_actions=is_wiki_action,
                           location=location,
                           extension_handling=extension_handling).render()
 
@@ -661,6 +686,7 @@ class FrontController(RedditController):
             return self._edit_normal_reddit(location, num, after, reverse,
                                             count, created, name, user)
 
+    @require_oauth2_scope("read")
     @api_doc(api_section.subreddits, uri='/r/{subreddit}/about', extensions=['json'])
     def GET_about(self):
         """Return information about the subreddit.
@@ -669,6 +695,11 @@ class FrontController(RedditController):
         if not is_api() or isinstance(c.site, FakeSubreddit):
             return self.abort404()
         return Reddit(content = Wrapped(c.site)).render()
+
+    @require_oauth2_scope("read")
+    def GET_sidebar(self):
+        usertext = UserText(c.site, c.site.description)
+        return Reddit(content=usertext).render()
 
     def GET_awards(self):
         """The awards page."""
@@ -754,11 +785,12 @@ class FrontController(RedditController):
     @base_listing
     @validate(query=VLength('q', max_length=512),
               sort=VMenu('sort', SearchSortMenu, remember=False),
+              recent=VMenu('t', TimeMenu, remember=False),
               restrict_sr=VBoolean('restrict_sr', default=False),
               syntax=VOneOf('syntax', options=SearchQuery.known_syntaxes))
     @api_doc(api_section.search, extensions=['json', 'xml'])
-    def GET_search(self, query, num, reverse, after, count, sort, restrict_sr,
-                   syntax):
+    def GET_search(self, query, num, reverse, after, count, sort, recent,
+                   restrict_sr, syntax):
         """Search links page."""
         if query and '.' in query:
             url = sanitize_url(query, require_scheme = True)
@@ -776,7 +808,8 @@ class FrontController(RedditController):
         try:
             cleanup_message = None
             try:
-                q = SearchQuery(query, site, sort, syntax=syntax)
+                q = SearchQuery(query, site, sort,
+                                recent=recent, syntax=syntax)
                 results, etime, spane = self._search(q, num=num, after=after,
                                                      reverse=reverse,
                                                      count=count)
@@ -788,7 +821,7 @@ class FrontController(RedditController):
                 cleaned = re.sub("[^\w\s]+", " ", query)
                 cleaned = cleaned.lower().strip()
 
-                q = SearchQuery(cleaned, site, sort)
+                q = SearchQuery(cleaned, site, sort, recent=recent)
                 results, etime, spane = self._search(q, num=num,
                                                      after=after,
                                                      reverse=reverse,
@@ -806,8 +839,9 @@ class FrontController(RedditController):
             
             res = SearchPage(_('search results'), query, etime, results.hits,
                              content=spane,
-                             nav_menus=[SearchSortMenu(default=sort)],
-                             search_params=dict(sort=sort),
+                             nav_menus=[SearchSortMenu(default=sort),
+                                        TimeMenu(default=recent)],
+                             search_params=dict(sort=sort, t=recent),
                              infotext=cleanup_message,
                              simple=False, site=c.site,
                              restrict_sr=restrict_sr,
@@ -815,6 +849,7 @@ class FrontController(RedditController):
                              converted_data=q.converted_data,
                              facets=results.subreddit_facets,
                              sort=sort,
+                             recent=recent,
                              ).render()
 
             return res
@@ -948,24 +983,37 @@ class FrontController(RedditController):
         sup.set_expires_header()
 
         if c.extension == 'json':
-            c.response.content = sup.sup_json(period)
-            return c.response
+            return sup.sup_json(period)
         else:
             return self.abort404()
 
 
+    @require_oauth2_scope("modtraffic")
     @validate(VTrafficViewer('article'),
               article = VLink('article'))
     def GET_traffic(self, article):
         content = trafficpages.PromotedLinkTraffic(article)
         if c.render_style == 'csv':
-            c.response.content = content.as_csv()
-            return c.response
+            return content.as_csv()
 
         return LinkInfoPage(link=article,
                             page_classes=["promoted-traffic"],
                             comment=None,
                             content=content).render()
+
+    @validate(VTrafficViewer('link'),
+              link=VLink('link'))
+    def GET_promo_traffic(self, link):
+        if link:
+            content = trafficpages.PromoTraffic(link)
+            if c.render_style == 'csv':
+                return content.as_csv()
+            return LinkInfoPage(link=link,
+                                page_classes=["promo-traffic"],
+                                comment=None,
+                                content=content).render()
+        else:
+            return self.abort404()
 
     @validate(VSponsorAdmin())
     def GET_site_traffic(self):
@@ -987,6 +1035,44 @@ class FrontController(RedditController):
         return BoringPage(_("rules of reddit"), show_sidebar=False,
                           content=RulesPage(), page_classes=["rulespage-body"]
                           ).render()
+    
+    @validate(vendor=VOneOf("v", ("claimed-gold", "claimed-creddits",
+                                  "paypal", "google-checkout"),
+                            default="claimed-gold"))
+    def GET_goldthanks(self, vendor):
+        vendor_url = None
+        vendor_claim_msg = _("thanks for buying reddit gold! your transaction "
+                             "has been completed and emailed to you. you can "
+                             "check the details by logging into your account "
+                             "at:")
+        lounge_md = None
+        if vendor == "claimed-gold":
+            claim_msg = _("claimed! enjoy your reddit gold membership.")
+        elif vendor == "claimed-creddits":
+            claim_msg = _("your gold creddits have been claimed!")
+            lounge_md = _("now go to someone's userpage and give "
+                          "them a present!")
+        elif vendor == "paypal":
+            claim_msg = vendor_claim_msg
+            vendor_url = "https://www.paypal.com/us"
+        elif vendor == "google-checkout":
+            claim_msg = vendor_claim_msg
+            vendor_url = "https://wallet.google.com/manage"
+        else:
+            abort(404)
+        
+        if g.lounge_reddit and not lounge_md:
+            lounge_url = "/r/" + g.lounge_reddit
+            lounge_md = strings.lounge_msg % {'link': lounge_url}
+        
+        return BoringPage(_("thanks"), show_sidebar=False,
+                          content=GoldThanks(claim_msg=claim_msg,
+                                             vendor_url=vendor_url,
+                                             lounge_md=lounge_md)).render()
+
+
+    def GET_gold_info(self):
+        return GoldInfoPage(_("gold"), show_sidebar=False).render()
 
 
 class FormsController(RedditController):
@@ -1063,55 +1149,6 @@ class FormsController(RedditController):
             return self.redirect("/password?expired=true")
         return BoringPage(_("reset password"),
                           content=ResetPassword(key=key, done=done)).render()
-
-    @validate(VUser())
-    def GET_depmod(self):
-        displayPane = PaneStack()
-
-        active_trials = {}
-        finished_trials = {}
-
-        juries = Jury.by_account(c.user)
-
-        trials = trial_info([j._thing2 for j in juries])
-
-        for j in juries:
-            defendant = j._thing2
-
-            if trials.get(defendant._fullname, False):
-                active_trials[defendant._fullname] = j._name
-            else:
-                finished_trials[defendant._fullname] = j._name
-
-        if active_trials:
-            fullnames = sorted(active_trials.keys(), reverse=True)
-
-            def my_wrap(thing):
-                w = Wrapped(thing)
-                w.hide_score = True
-                w.likes = None
-                w.trial_mode = True
-                w.render_class = LinkOnTrial
-                w.juryvote = active_trials[thing._fullname]
-                return w
-
-            listing = wrap_links(fullnames, wrapper=my_wrap)
-            displayPane.append(InfoBar(strings.active_trials,
-                                       extra_class="mellow"))
-            displayPane.append(listing)
-
-        if finished_trials:
-            fullnames = sorted(finished_trials.keys(), reverse=True)
-            listing = wrap_links(fullnames)
-            displayPane.append(InfoBar(strings.finished_trials,
-                                       extra_class="mellow"))
-            displayPane.append(listing)
-
-        displayPane.append(InfoBar(strings.more_info_link %
-                                       dict(link="/help/deputies"),
-                                   extra_class="mellow"))
-
-        return Reddit(content = displayPane).render()
 
     @validate(VUser(),
               location = nop("location"))
@@ -1201,13 +1238,13 @@ class FormsController(RedditController):
     def GET_validuser(self):
         """checks login cookie to verify that a user is logged in and
         returns their user name"""
-        c.response_content_type = 'text/plain'
+        response.content_type = 'text/plain'
         if c.user_is_loggedin:
-            perm = str(c.user.can_wiki())
-            c.response.content = c.user.name + "," + perm
+            # Change cookie based on can_wiki trac permissions
+            perm = str(c.user.can_wiki(default=False))
+            return c.user.name + "," + perm
         else:
-            c.response.content = ''
-        return c.response
+            return ""
 
     def _render_opt_in_out(self, msg_hash, leave):
         """Generates the form for an optin/optout page"""
@@ -1243,7 +1280,7 @@ class FormsController(RedditController):
 
     @validate(VUser(),
               secret=VPrintable("secret", 50))
-    def GET_thanks(self, secret):
+    def GET_claim(self, secret):
         """The page to claim reddit gold trophies"""
         return BoringPage(_("thanks"), content=Thanks(secret)).render()
 
@@ -1255,9 +1292,16 @@ class FormsController(RedditController):
               # variables below are just for gifts
               signed = VBoolean("signed"),
               recipient_name = VPrintable("recipient", max_length = 50),
+              comment = VByName("comment", thing_cls=Comment),
               giftmessage = VLength("giftmessage", 10000))
     def GET_gold(self, goldtype, period, months,
-                 signed, recipient_name, giftmessage):
+                 signed, recipient_name, giftmessage, comment):
+
+        if comment:
+            comment_sr = Subreddit._byID(comment.sr_id, data=True)
+            if comment._deleted or not comment_sr.allow_comment_gilding:
+                comment = None
+
         start_over = False
         recipient = None
         if goldtype == "autorenew":
@@ -1269,10 +1313,18 @@ class FormsController(RedditController):
         elif goldtype == "gift":
             if months is None or months < 1:
                 start_over = True
-            try:
-                recipient = Account._by_name(recipient_name or "")
-            except NotFound:
-                start_over = True
+
+            if comment:
+                recipient = Account._byID(comment.author_id, data=True)
+                if recipient._deleted:
+                    comment = None
+                    recipient = None
+                    start_over = True
+            else:
+                try:
+                    recipient = Account._by_name(recipient_name or "")
+                except NotFound:
+                    start_over = True
         else:
             goldtype = ""
             start_over = True
@@ -1290,20 +1342,17 @@ class FormsController(RedditController):
 
             if goldtype == "gift":
                 payment_blob["signed"] = signed
-                payment_blob["recipient"] = recipient_name
-                payment_blob["giftmessage"] = giftmessage
+                payment_blob["recipient"] = recipient.name
+                payment_blob["giftmessage"] = _force_utf8(giftmessage)
+                if comment:
+                    payment_blob["comment"] = comment._fullname
 
-            passthrough = randstr(15)
-
-            g.hardcache.set("payment_blob-" + passthrough,
-                            payment_blob, 86400 * 30)
-
-            g.log.info("just set payment_blob-%s" % passthrough)
+            passthrough = generate_blob(payment_blob)
 
             return BoringPage(_("reddit gold"),
-                              show_sidebar = False,
+                              show_sidebar=False,
                               content=GoldPayment(goldtype, period, months,
                                                   signed, recipient,
-                                                  giftmessage, passthrough)
+                                                  giftmessage, passthrough,
+                                                  comment)
                               ).render()
-

@@ -31,6 +31,7 @@
 %>
 <%namespace file="login.html" import="login_panel, login_form"/>
 <%namespace file="framebuster.html" import="framebuster"/>
+<%namespace file="less.html" import="less_js"/>
 <%namespace file="utils.html" import="tags, css_class"/>
 <%inherit file="base.html"/>
 
@@ -82,25 +83,11 @@
       %endif
   %endif
 
-  %if c.can_apply_styles and c.allow_styles and c.site.stylesheet_contents:
-     <% inline_stylesheet = (
-          len(c.site.stylesheet_contents) < 1024
-          and '<' not in c.site.stylesheet_contents) %>
-     %if inline_stylesheet:
-       ## for very simple stylesheets, we can just include them inline
-       <style type="text/css" title="applied_subreddit_stylesheet">
-           ${unsafe(c.site.stylesheet_contents)}
-       </style>
-     %else:
-       <link rel="stylesheet"
-             href="http://${get_domain(cname=False, subreddit=True)}/stylesheet.css?v=${c.site.stylesheet_hash}"
-             title="applied_subreddit_stylesheet"
-             type="text/css" />
-     %endif
-  %endif
-  %if getattr(thing, "additional_css", None):
-    <link rel="stylesheet" href="${static(thing.additional_css)}" 
-          type="text/css" />
+  %if c.can_apply_styles and c.allow_styles and c.site.stylesheet_hash:
+    <link rel="stylesheet"
+          href="${c.site.stylesheet_url}"
+          title="applied_subreddit_stylesheet"
+          type="text/css">
   %endif
 
   <!--[if lt IE 7]>
@@ -123,6 +110,7 @@
   <!--[if lt IE 9]>
     ${unsafe(js.use('html5shiv'))}
   <![endif]-->
+  ${less_js()}
 </%def>
 
 <%def name="javascript_run()">
@@ -138,13 +126,14 @@
         ${sidebar(content = thing.rightbox())}
       </div>
     %endif
-    
-    %if thing.content:
+
+    <% content = getattr(self, "content", None) or thing.content %>
+    %if content:
       ##<div class="fixedwidth"><!--IE6sux--></div>
       ##<div class="clearleft"><!--IE6sux--></div>
       <a name="content"></a>
-      <div ${tags(id=thing.content_id)} class="content${css_class(thing)}">
-        ${thing.content()}
+      <div ${tags(id=thing.content_id)} class="content${css_class(thing)}" role="main">
+        ${content()}
       </div>
     %endif
     
@@ -157,25 +146,21 @@
         <div class="login-popup cover-overlay" style="display: none">
           <div class="cover" onclick="return hidecover(this)"></div>
           <div class="popup">
+            <a href="#" onclick="return hidecover(this)" class="hidecover">
+              ${_("close this window")}
+            </a>
             <h1 class="cover-msg">${strings.cover_msg}</h1>
             ${login_panel(login_form)}
-            <div class="close-popup">
-              <a href="#" onclick="return hidecover(this)">
-                ${_("close this window")}
-              </a>
-            </div>
           </div>
         </div>
         %endif
         <div class="lang-popup cover-overlay" style="display: none">
           <div class="cover" onclick="return hidecover(this)"></div>
           <div class="popup">
+            <a href="#" onclick="return hidecover(this)" class="hidecover">
+              ${_("close this window")}
+            </a>
             <%include file="prefoptions.html" />
-            <div style="text-align:center; clear:both;">
-              <a href="#" onclick="return hidecover(this)">
-                ${_("close this window")}
-              </a>
-            </div>
           </div>
         </div>
       %endif
