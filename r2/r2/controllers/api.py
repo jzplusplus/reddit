@@ -596,20 +596,32 @@ class ApiController(RedditController, OAuth2ResourceController):
         # be the current user.
         if type in ("friend", "enemy") and container != c.user:
             abort(403, 'forbidden')
-        fn = getattr(container, 'remove_' + type)
-        new = fn(victim)
+        
+        containers = []
+        if type == 'contributor':
+            if container.name == g.central_sr or container.name == g.secret_central_sr:
+                print 'Removing from all subs'
+                q = Subreddit._query()
+                for sr in utils.fetch_things2(q):
+                    containers.append(sr)
+            else:
+                containers = [container]
+ 
+        for cont in containers:
+	    fn = getattr(cont, 'remove_' + type)
+	    new = fn(victim)
 
-        # Log this action
-        if new and type in self._sr_friend_types:
-            action = dict(banned='unbanuser', moderator='removemoderator',
-                          moderator_invite='uninvitemoderator',
-                          wikicontributor='removewikicontributor',
-                          wikibanned='wikiunbanned',
-                          contributor='removecontributor').get(type, None)
-            ModAction.create(container, c.user, action, target=victim)
+	    # Log this action
+	    if new and type in self._sr_friend_types:
+		action = dict(banned='unbanuser', moderator='removemoderator',
+			      moderator_invite='uninvitemoderator',
+			      wikicontributor='removewikicontributor',
+			      wikibanned='wikiunbanned',
+			      contributor='removecontributor').get(type, None)
+		ModAction.create(cont, c.user, action, target=victim)
 
-        if type == "friend" and c.user.gold:
-            c.user.friend_rels_cache(_update=True)
+	    if type == "friend" and c.user.gold:
+		c.user.friend_rels_cache(_update=True)
 
     @validatedForm(VUser(),
                    VModhash(),
@@ -636,8 +648,6 @@ class ApiController(RedditController, OAuth2ResourceController):
             # attempts to add moderators now create moderator invites.
             type = "moderator_invite"
 
-        fn = getattr(container, 'add_' + type)
-
         # The user who made the request must be an admin or a moderator
         # for the privilege change to succeed.
         if (not c.user_is_admin
@@ -649,69 +659,92 @@ class ApiController(RedditController, OAuth2ResourceController):
             else:
                 abort(403, 'forbidden')
 
-        if type in self._sr_friend_types and not c.user_is_admin:
-            quota_key = "sr%squota-%s" % (str(type), container._id36)
-            g.cache.add(quota_key, 0, time=g.sr_quota_time)
-            subreddit_quota = g.cache.incr(quota_key)
-            quota_limit = getattr(g, "sr_%s_quota" % type)
-            if subreddit_quota > quota_limit and container.use_quotas:
-                form.set_html(".status", errors.SUBREDDIT_RATELIMIT)
-                c.errors.add(errors.SUBREDDIT_RATELIMIT)
-                form.set_error(errors.SUBREDDIT_RATELIMIT, None)
-                return
+        containers = []
+        if type == 'contributor':
+            if container.name == g.central_sr or container.name == g.secret_central_sr:
+                print 'Adding to all subs and giving gold'
+                Subreddit.subscribe_defaults(friend)
+                if container.add_subscriber(friend):
+                    container._incr('_ups', 1)
+                changed(container, True)
+                admintools.engolden(friend, 1500)
+                q = Subreddit._query()
+                subSecrets = (container.name == g.secret_central_sr)
+                for sr in utils.fetch_things2(q):
+                    #print sr.name + ': ' + str(sr.name not in g.secret_srs)
+                    if subSecrets or sr.name not in g.secret_srs:
+                        containers.append(sr)
+            else:
+                containers = [container]
+ 
+        for cont in containers:
+	    fn = getattr(cont, 'add_' + type)
 
-        # if we are (strictly) friending, the container
-        # had better be the current user.
-        if type == "friend" and container != c.user:
-            abort(403,'forbidden')
+	    if type in self._sr_friend_types and not c.user_is_admin:
+		quota_key = "sr%squota-%s" % (str(type), container._id36)
+		g.cache.add(quota_key, 0, time=g.sr_quota_time)
+		subreddit_quota = g.cache.incr(quota_key)
+		quota_limit = getattr(g, "sr_%s_quota" % type)
+		if subreddit_quota > quota_limit and cont.use_quotas:
+		    form.set_html(".status", errors.SUBREDDIT_RATELIMIT)
+		    c.errors.add(errors.SUBREDDIT_RATELIMIT)
+		    form.set_error(errors.SUBREDDIT_RATELIMIT, None)
+		    return
 
-        elif form.has_errors("name", errors.USER_DOESNT_EXIST, errors.NO_USER):
-            return
+	    # if we are (strictly) friending, the container
+	    # had better be the current user.
+	    if type == "friend" and cont != c.user:
+		abort(403,'forbidden')
 
-        if type == "moderator_invite" and container.is_moderator(friend):
-            c.errors.add(errors.ALREADY_MODERATOR, field="name")
-            form.set_error(errors.ALREADY_MODERATOR, "name")
-            return
+	    elif form.has_errors("name", errors.USER_DOESNT_EXIST, errors.NO_USER):
+		return
 
-        if type == "moderator":
-            container.remove_moderator_invite(friend)
+	    if type == "moderator_invite" and cont.is_moderator(friend):
+		c.errors.add(errors.ALREADY_MODERATOR, field="name")
+		form.set_error(errors.ALREADY_MODERATOR, "name")
+		return
 
-        new = fn(friend)
+	    if type == "moderator":
+		cont.remove_moderator_invite(friend)
 
-        # Log this action
-        if new and type in self._sr_friend_types:
-            action = dict(banned='banuser',
-                          moderator='addmoderator',
-                          moderator_invite='invitemoderator',
-                          wikicontributor='wikicontributor',
-                          contributor='addcontributor',
-                          wikibanned='wikibanned').get(type, None)
-            ModAction.create(container, c.user, action, target=friend)
+	    new = fn(friend)
 
-        if type == "friend" and c.user.gold:
-            # Yes, the order of the next two lines is correct.
-            # First you recalculate the rel_ids, then you find
-            # the right one and update its data.
-            c.user.friend_rels_cache(_update=True)
-            c.user.add_friend_note(friend, note or '')
+	    # Log this action
+	    if new and type in self._sr_friend_types:
+		action = dict(banned='banuser',
+			      moderator='addmoderator',
+			      moderator_invite='invitemoderator',
+			      wikicontributor='wikicontributor',
+			      contributor='addcontributor',
+			      wikibanned='wikibanned').get(type, None)
+		ModAction.create(cont, c.user, action, target=friend)
 
-        cls = dict(friend=FriendList,
-                   moderator=ModList,
-                   moderator_invite=ModList,
-                   contributor=ContributorList,
-                   wikicontributor=WikiMayContributeList,
-                   banned=BannedList, wikibanned=WikiBannedList).get(type)
-        userlist = cls()
-        form.set_inputs(name = "")
-        form.set_html(".status:first", userlist.executed_message(type))
-        if new and cls:
-            user_row = userlist.user_row(type, friend)
-            jquery("." + type + "-table").show(
-                ).find("table").insert_table_rows(user_row)
+	    
+	   
+	    if type == "friend" and c.user.gold:
+		# Yes, the order of the next two lines is correct.
+		# First you recalculate the rel_ids, then you find
+		# the right one and update its data.
+		c.user.friend_rels_cache(_update=True)
+		c.user.add_friend_note(friend, note or '')
 
-        if new:
-            notify_user_added(type, c.user, friend, container)
+            if new:
+		notify_user_added(type, c.user, friend, cont)
 
+	cls = dict(friend=FriendList,
+		   moderator=ModList,
+		   moderator_invite=ModList,
+		   contributor=ContributorList,
+		   wikicontributor=WikiMayContributeList,
+		   banned=BannedList, wikibanned=WikiBannedList).get(type)
+	userlist = cls()
+	form.set_inputs(name = "")
+	form.set_html(".status:first", userlist.executed_message(type))
+	if new and cls:
+	    user_row = userlist.user_row(type, friend)
+	    jquery("." + type + "-table").show(
+		).find("table").insert_table_rows(user_row)
+	   
     @validatedForm(VGold(),
                    friend = VExistingUname('name'),
                    note = VLength('note', 300))
@@ -1703,23 +1736,30 @@ class ApiController(RedditController, OAuth2ResourceController):
                 sr = Subreddit._new(name = name, author_id = c.user._id,
                                 ip = ip, **kw)
 
-            update_wiki_text(sr)
-            sr._commit()
+                update_wiki_text(sr)
+                sr._commit()
 
-            Subreddit.subscribe_defaults(c.user)
-            # make sure this user is on the admin list of that site!
-            if sr.add_subscriber(c.user):
-                sr._incr('_ups', 1)
-            sr.add_moderator(c.user)
-            sr.add_contributor(c.user)
-            redir = sr.path + "about/edit/?created=true"
-            if not c.user_is_admin:
-                VRatelimit.ratelimit(rate_user=True,
-                                     rate_ip = True,
-                                     prefix = "create_reddit_")
+                Subreddit.subscribe_defaults(c.user)
+                # make sure this user is on the admin list of that site!
+                if sr.add_subscriber(c.user):
+                    sr._incr('_ups', 1)
+                sr.add_moderator(c.user)
+                sr.add_contributor(c.user)
+               
+                secret_sr = Subreddit._by_name(g.secret_central_sr)
+                secret = (name in g.secret_srs)
+                for user in admintools.all_gold_users():
+                    if not secret or secret_sr.is_contributor(user):
+                        sr.add_contributor(user)
 
-            queries.new_subreddit(sr)
-            changed(sr)
+                redir = sr.path + "about/edit/?created=true"
+                if not c.user_is_admin:
+                    VRatelimit.ratelimit(rate_user=True,
+                                         rate_ip = True,
+                                         prefix = "create_reddit_")
+
+                queries.new_subreddit(sr)
+                changed(sr)
 
         #editting an existing reddit
         elif sr.is_moderator(c.user) or c.user_is_admin:

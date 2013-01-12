@@ -32,6 +32,11 @@ from copy import copy
 
 class AdminTools(object):
 
+    def all_gold_users(self):
+        q = Account._query(Account.c.gold == True, data=True,
+                           sort="_id")
+        return fetch_things2(q)
+
     def spam(self, things, auto=True, moderator_banned=False,
              banner=None, date=None, train_spam=True, **kw):
         from r2.lib.db import queries
@@ -208,11 +213,6 @@ def cancel_subscription(subscr_id):
         g.log.info("%s canceled their recurring subscription %s" %
                    (account.name, subscr_id))
 
-def all_gold_users():
-    q = Account._query(Account.c.gold == True, data=True,
-                       sort="_id")
-    return fetch_things2(q)
-
 def accountid_from_paypalsubscription(subscr_id):
     if subscr_id is None:
         return None
@@ -231,7 +231,7 @@ def update_gold_users(verbose=False):
     count = 0
     expiration_dates = {}
 
-    for account in all_gold_users():
+    for account in admintools.all_gold_users():
         if not hasattr(account, "gold_expiration"):
             g.log.error("%s has no gold_expiration" % account.name)
             continue
