@@ -158,6 +158,8 @@ class AdminTools(object):
                 sr._incr('mod_actions', len(sr_things))
 
     def engolden(self, account, days):
+        from r2.models import Award
+
         account.gold = True
 
         now = datetime.now(g.display_tz)
@@ -179,6 +181,7 @@ class AdminTools(object):
         account.friend_rels_cache(_update=True)
 
     def degolden(self, account, severe=False):
+        from r2.models import Award
 
         if severe:
             account.gold_charter = False
