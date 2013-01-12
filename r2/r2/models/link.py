@@ -72,7 +72,10 @@ class Link(Thing, Printable):
                      flair_text=None,
                      flair_css_class=None,
                      comment_tree_version=1,
-                     comment_tree_id=0)
+                     comment_tree_id=0,
+                     contest_mode=False,
+                     skip_commentstree_q="",
+                     )
     _essentials = ('sr_id', 'author_id')
     _nsfw = re.compile(r"\bnsfw\b", re.I)
 
@@ -784,6 +787,7 @@ class Comment(Thing, Printable):
     def wrapped_cache_key(wrapped, style):
         s = Printable.wrapped_cache_key(wrapped, style)
         s.extend([wrapped.body])
+        s.extend([hasattr(wrapped, "link") and wrapped.link.contest_mode])
         return s
 
     def make_permalink(self, link, sr=None, context=None, anchor=False):
@@ -809,7 +813,8 @@ class Comment(Thing, Printable):
         from r2.lib.db import queries
         with CachedQueryMutator() as m:
             gilding = utils.Storage(thing=self, date=now)
-            m.insert(queries.get_gilded_comments(), [gilding])
+            m.insert(queries.get_all_gilded_comments(), [gilding])
+            m.insert(queries.get_gilded_comments(self.sr_id), [gilding])
 
     def _fill_in_parents(self):
         if not self.parent_id:
@@ -1010,6 +1015,18 @@ class Comment(Thing, Printable):
                 item.votable = False
             else:
                 item.votable = True
+
+            if (item.link.contest_mode and
+                 not (c.user_is_admin or
+                      c.user_is_loggedin and
+                        item.subreddit.is_moderator(c.user))):
+                item.upvotes = 1
+                item.downvotes = 0
+                item.score = 1
+                item.score_hidden = True
+                item.voting_score = [1, 1, 1]
+            else:
+                item.score_hidden = False
 
             #will seem less horrible when add_props is in pages.py
             from r2.lib.pages import UserText

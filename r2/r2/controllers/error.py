@@ -26,7 +26,7 @@ import random
 
 import pylons
 
-from paste.httpexceptions import HTTPFound, HTTPMovedPermanently
+from webob.exc import HTTPFound, HTTPMovedPermanently
 from pylons.i18n import _
 from pylons import c, g, request, response
 
@@ -54,8 +54,6 @@ except Exception, e:
         os._exit(1)
 
 
-NUM_FAILIENS = 3
-
 redditbroke =  \
 '''<html>
   <head>
@@ -74,6 +72,14 @@ redditbroke =  \
   </body>
 </html>
 '''
+
+
+FAILIEN_COUNT = 3
+def make_failien_url():
+    failien_number = random.randint(1, FAILIEN_COUNT)
+    failien_name = "youbrokeit%d.png" % failien_number
+    return static(failien_name)
+
 
 class ErrorController(RedditController):
     """Generates error documents as and when they are required.
@@ -136,12 +142,13 @@ class ErrorController(RedditController):
         else:
             template_name = '/ratelimit_throttled.html'
 
-        loader = pylons.buffet.engines['mako']['engine']
-        template = loader.load_template(template_name)
+        template = g.mako_lookup.get_template(template_name)
         return template.render(logo_url=static(g.default_header_url))
 
     def send503(self):
-        response.headers["Retry-After"] = str(request.environ["retry_after"])
+        retry_after = request.environ.get("retry_after")
+        if retry_after:
+            response.headers["Retry-After"] = str(retry_after)
         return request.environ['usable_error_content']
 
     def GET_document(self):
@@ -157,14 +164,24 @@ class ErrorController(RedditController):
                 code = 404
             srname = request.GET.get('srname', '')
             takedown = request.GET.get('takedown', "")
-            
+
+            # StatusBasedRedirect will override this anyway, but we need this
+            # here for pagecache to see.
+            response.status_int = code
+
             if srname:
                 c.site = Subreddit._by_name(srname)
-            if c.render_style not in self.allowed_render_styles:
-                if code not in (204, 304):
-                    return str(code)
-                else:
-                    return ""
+
+            if code in (204, 304):
+                # NEVER return a content body on 204/304 or downstream
+                # caches may become very confused.
+                if request.GET.has_key('x-sup-id'):
+                    x_sup_id = request.GET.get('x-sup-id')
+                    if '\r\n' not in x_sup_id:
+                        response.headers['x-sup-id'] = x_sup_id
+                return ""
+            elif c.render_style not in self.allowed_render_styles:
+                return str(code)
             elif c.render_style in extensions.API_TYPES:
                 data = request.environ.get('extra_error_data', {'error': code})
                 return websafe_json(json.dumps(data))
@@ -177,17 +194,10 @@ class ErrorController(RedditController):
                 return self.send429()
             elif code == 500:
                 randmin = {'admin': random.choice(self.admins)}
-                failien_name = 'youbrokeit%d.png' % random.randint(1, NUM_FAILIENS)
-                failien_url = static(failien_name)
+                failien_url = make_failien_url()
                 return redditbroke % (failien_url, rand_strings.sadmessages % randmin)
             elif code == 503:
                 return self.send503()
-            elif code == 304:
-                if request.GET.has_key('x-sup-id'):
-                    x_sup_id = request.GET.get('x-sup-id')
-                    if '\r\n' not in x_sup_id:
-                        response.headers['x-sup-id'] = x_sup_id
-                return ""
             elif c.site:
                 return self.send404()
             else:
@@ -212,7 +222,7 @@ def handle_awful_failure(fail_text):
         import traceback
         g.log.error("FULLPATH: %s" % fail_text)
         g.log.error(traceback.format_exc())
-        return redditbroke % (random.randint(1,NUM_FAILIENS), fail_text)
+        return redditbroke % (make_failien_url(), fail_text)
     except:
         # we are doomed.  Admit defeat
         return "This is an error that should never occur.  You win."

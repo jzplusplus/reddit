@@ -39,7 +39,7 @@ from pylons.i18n import _, ungettext
 from pylons import c, request, g
 from pylons.controllers.util import abort
 
-from r2.lib import media
+from r2.lib import media, inventory
 from r2.lib import promote, tracking
 from r2.lib.captcha import get_iden
 from r2.lib.filters import spaceCompress, _force_unicode, _force_utf8
@@ -48,7 +48,7 @@ from r2.lib.menus import NavButton, NamedButton, NavMenu, PageNameNav, JsButton
 from r2.lib.menus import SubredditButton, SubredditMenu, ModeratorMailButton
 from r2.lib.menus import OffsiteButton, menu, JsNavMenu
 from r2.lib.strings import plurals, rand_strings, strings, Score
-from r2.lib.utils import title_to_url, query_string, UrlParser, to_js, vote_hash
+from r2.lib.utils import title_to_url, query_string, UrlParser, vote_hash
 from r2.lib.utils import link_duplicates, make_offset_date, median, to36
 from r2.lib.utils import trunc_time, timesince, timeuntil, weighted_lottery
 from r2.lib.template_helpers import add_sr, get_domain, format_number
@@ -56,7 +56,7 @@ from r2.lib.subreddit_search import popular_searches
 from r2.lib.scraper import get_media_embed
 from r2.lib.log import log_text
 from r2.lib.memoize import memoize
-from r2.lib.utils import trunc_string as _truncate
+from r2.lib.utils import trunc_string as _truncate, to_date
 from r2.lib.filters import safemarkdown
 
 import sys, random, datetime, calendar, simplejson, re, time
@@ -173,8 +173,8 @@ class Reddit(Templated):
             elif (c.firsttime == 'mobile_suggest' and
                   c.render_style != 'compact'):
                 infotext = strings.iphone_first
-            elif g.announcement_message:
-                infotext = g.announcement_message
+            elif g.live_config.get("announcement_message"):
+                infotext = g.live_config["announcement_message"]
 
         if isinstance(c.site, DomainSR) and c.site.domain.endswith("imgur.com"):
             self.infobar = InfoBar(
@@ -309,6 +309,25 @@ class Reddit(Templated):
         if c.user.pref_show_sponsorships or not c.user.gold:
             ps.append(SponsorshipBox())
 
+        user_banned = c.user_is_loggedin and c.site.is_banned(c.user)
+        if self.submit_box and (c.user_is_loggedin or not g.read_only_mode) and not user_banned:
+            kwargs = {
+                "title": _("Submit a post"),
+                "css_class": "submit",
+                "show_cover": True
+            }
+            if not c.user_is_loggedin or c.site.can_submit(c.user) or isinstance(c.site, FakeSubreddit):
+                kwargs["link"] = "/submit"
+                kwargs["sr_path"] = isinstance(c.site, DefaultSR) or not isinstance(c.site, FakeSubreddit),
+                kwargs["subtitles"] = [strings.submit_box_text]
+            else:
+                kwargs["disabled"] = True
+                if c.site.type == "archived":
+                    kwargs["subtitles"] = [strings.submit_box_archived_text]
+                else:
+                    kwargs["subtitles"] = [strings.submit_box_restricted_text]
+            ps.append(SideBox(**kwargs))
+
         no_ads_yet = True
         show_adbox = (c.user.pref_show_adbox or not c.user.gold) and not g.disable_ads
         if isinstance(c.site, (MultiReddit, ModSR)) and c.user_is_loggedin:
@@ -341,25 +360,6 @@ class Reddit(Templated):
             no_ads_yet = False
         elif self.show_wiki_actions:
             ps.append(self.wiki_actions_menu())
-
-        user_banned = c.user_is_loggedin and c.site.is_banned(c.user)
-        if self.submit_box and (c.user_is_loggedin or not g.read_only_mode) and not user_banned:
-            kwargs = {
-                "title": _("Submit a link"),
-                "css_class": "submit",
-                "show_cover": True
-            }
-            if not c.user_is_loggedin or c.site.can_submit(c.user) or isinstance(c.site, FakeSubreddit):
-                kwargs["link"] = "/submit"
-                kwargs["sr_path"] = isinstance(c.site, DefaultSR) or not isinstance(c.site, FakeSubreddit),
-                kwargs["subtitles"] = [strings.submit_box_text]
-            else:
-                kwargs["disabled"] = True
-                if c.site.type == "archived":
-                    kwargs["subtitles"] = [strings.submit_box_archived_text]
-                else:
-                    kwargs["subtitles"] = [strings.submit_box_restricted_text]
-            ps.append(SideBox(**kwargs))
 
         if self.create_reddit_box and c.user_is_loggedin and \
            c.user.name in g.admins:
@@ -1133,6 +1133,7 @@ class CommentPane(Templated):
         elif num > 100:
             num = (num / 10) * 10
         return "_".join(map(str, ["commentpane", self.article._fullname,
+                                  self.article.contest_mode,
                                   num, self.sort, self.num, c.lang,
                                   self.can_reply, c.render_style,
                                   c.user.pref_show_flair,
@@ -1731,6 +1732,11 @@ class AllInfoBar(Templated):
             srs = Subreddit._byID(sr_ids, data=True, return_dict=False)
             if srs:
                 self.allminus_url = '/r/all-' + '-'.join([sr.name for sr in srs])
+
+        self.gilding_listing = False
+        if request.path.startswith("/comments/gilded"):
+            self.gilding_listing = True
+
         Templated.__init__(self)
 
 
@@ -3511,21 +3517,22 @@ class Promote_Graph(Templated):
 
         return promos
 
-    def __init__(self, admin_view=False):
+    def __init__(self, start_date, end_date, bad_dates=None, admin_view=False):
         self.admin_view = admin_view and c.user_is_sponsor
         self.now = promote.promo_datetime_now()
 
-        start_date = promote.promo_datetime_now(offset = -7).date()
-        end_date = promote.promo_datetime_now(offset = 7).date()
+        start_date = to_date(start_date)
+        end_date = to_date(end_date)
+        end_before = end_date + datetime.timedelta(days=1)
 
-
-        size = (end_date - start_date).days
+        size = (end_before - start_date).days
+        self.dates = [start_date + datetime.timedelta(i) for i in xrange(size)]
 
         # these will be cached queries
-        market, promo_counter = self.get_market(None, start_date, end_date)
+        market, promo_counter = self.get_market(None, start_date, end_before)
         my_market = market
         if not self.admin_view:
-            my_market = self.get_market(c.user._id, start_date, end_date)[0]
+            my_market = self.get_market(c.user._id, start_date, end_before)[0]
 
         # determine the range of each link
         promote_blocks = []
@@ -3534,7 +3541,7 @@ class Promote_Graph(Templated):
                 and not promote.is_rejected(link)
                 and not promote.is_unpaid(link)):
                 promote_blocks.append((link, starti, endi, campaign))
-        self.promo_iter(start_date, end_date, block_maker)
+        self.promo_iter(start_date, end_before, block_maker)
 
         # now sort the promoted_blocks into the most contiguous chuncks we can
         sorted_blocks = []
@@ -3591,13 +3598,50 @@ class Promote_Graph(Templated):
 
         self.promo_traffic = dict(self.promo_traffic)
 
-        Templated.__init__(self,
-                           total_size = size,
-                           market = market,
-                           my_market = my_market, 
-                           promo_counter = promo_counter,
-                           start_date = start_date,
-                           promote_blocks = sorted_blocks)
+        if self.admin_view:
+            predicted = inventory.get_predicted_by_date(None, start_date,
+                                                        end_before)
+            self.impression_inventory = predicted
+            # TODO: Real data
+            self.scheduled_impressions = dict.fromkeys(predicted, 0)
+        else:
+            self.scheduled_impressions = None
+            self.impression_inventory = None
+
+        self.cpc = {}
+        self.cpm = {}
+        self.delivered = {}
+        self.clicked = {}
+        self.my_market = {}
+        self.promo_counter = {}
+
+        today = self.now.date()
+        for i in xrange(size):
+            day = start_date + datetime.timedelta(i)
+            cpc = cpm = delivered = clicks = "---"
+            if day in self.promo_traffic:
+                delivered, clicks = self.promo_traffic[day]
+                if i in market and day < today:
+                    cpm = "$%.2f" % promote.cost_per_mille(market[i], delivered)
+                    cpc = "$%.2f" % promote.cost_per_click(market[i], clicks)
+                delivered = format_number(delivered, c.locale)
+                clicks = format_number(clicks, c.locale)
+                if day == today:
+                    delivered = "(%s)" % delivered
+                    clicks = "(%s)" % clicks
+            self.cpc[day] = cpc
+            self.cpm[day] = cpm
+            self.delivered[day] = delivered
+            self.clicked[day] = clicks
+            if i in my_market:
+                self.my_market[day] = "$%.2f" % my_market[i]
+            else:
+                self.my_market[day] = "---"
+            self.promo_counter[day] = promo_counter.get(i, "---")
+
+        Templated.__init__(self, today=today, promote_blocks=sorted_blocks,
+                           start_date=start_date, end_date=end_date,
+                           bad_dates=bad_dates)
 
     def to_iter(self, localize = True):
         locale = c.locale
@@ -3770,3 +3814,11 @@ class Goldvertisement(Templated):
             blurbs = g.live_config["goldvertisement_has_gold_blurbs"]
         self.blurb = random.choice(blurbs)
 
+class LinkCommentsSettings(Templated):
+    def __init__(self, link):
+        Templated.__init__(self)
+        self.link = link
+        self.contest_mode = link.contest_mode
+        self.can_edit = (c.user_is_loggedin
+                           and (c.user_is_admin or
+                                link.subreddit_slow.is_moderator(c.user)))

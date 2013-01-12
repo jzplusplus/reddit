@@ -20,6 +20,8 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+import json
+
 from pylons import c, g, request, response
 from pylons.i18n import _
 from pylons.controllers.util import abort
@@ -291,7 +293,7 @@ def validatedMultipartForm(self, self_method, responder, simple_vals,
         if val:
             return val
         else:
-            data = simplejson.dumps(responder.make_response())
+            data = json.dumps(responder.make_response())
             response.content_type = "text/html"
             return ('<html><head><script type="text/javascript">\n'
                     'parent.$.handleResponse().call('
@@ -312,10 +314,35 @@ class nop(Validator):
         return x
 
 class VLang(Validator):
-    def run(self, lang):
+    @staticmethod
+    def validate_lang(lang, strict=False):
         if lang in g.all_languages:
             return lang
-        return g.lang
+        else:
+            if not strict:
+                return g.lang
+            else:
+                raise ValueError("invalid language %r" % lang)
+
+    @staticmethod
+    def validate_content_langs(langs):
+        if langs == "all":
+            return langs
+
+        validated = []
+        for lang in langs:
+            try:
+                validated.append(VLang.validate_lang(lang, strict=True))
+            except ValueError:
+                pass
+
+        if not validated:
+            raise ValueError("no valid languages")
+
+        return validated
+
+    def run(self, lang):
+        return VLang.validate_lang(lang)
 
 class VRequired(Validator):
     def __init__(self, param, error, *a, **kw):
@@ -544,14 +571,15 @@ class VTitle(VLength):
         }
 
 class VMarkdown(VLength):
-    def __init__(self, param, max_length = 10000, **kw):
+    def __init__(self, param, max_length = 10000, renderer=None, **kw):
         VLength.__init__(self, param, max_length, **kw)
+        self.renderer = renderer
 
     def run(self, text, text2 = ''):
         text = text or text2
         VLength.run(self, text)
         try:
-            markdown_souptest(text)
+            markdown_souptest(text, renderer=self.renderer)
             return text
         except ValueError:
             import sys
@@ -1725,14 +1753,34 @@ class VDateRange(VDate):
     future/past requirements in VDate, two date fields must be
     provided and they must be in order.
 
+    If required is False, then the dates may be omitted without
+    causing an error (but if a start date is provided, an end
+    date MUST be provided as well).
+
     Additional Error conditions:
       * BAD_DATE_RANGE if start_date is not less than end_date
     """
+    def __init__(self, param, max_range=None, required=True, **kw):
+        self.max_range = max_range
+        self.required = required
+        VDate.__init__(self, param, **kw)
+
+
     def run(self, *a):
         try:
             start_date, end_date = [VDate.run(self, x) for x in a]
-            if not start_date or not end_date or end_date < start_date:
+            # If either date is missing and dates are "required",
+            # it's a bad range. Additionally, if one date is missing,
+            # but the other is provided, it's always an error.
+            if not start_date or not end_date:
+                if self.required or (not start_date and not end_date):
+                    self.set_error(errors.BAD_DATE_RANGE)
+                return (start_date, end_date)
+            elif end_date < start_date:
                 self.set_error(errors.BAD_DATE_RANGE)
+            elif self.max_range and end_date - start_date > self.max_range:
+                self.set_error(errors.DATE_RANGE_TOO_LARGE,
+                               {'days': self.max_range})
             return (start_date, end_date)
         except ValueError:
             # insufficient number of arguments provided (expect 2)

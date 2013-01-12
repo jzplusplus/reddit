@@ -66,6 +66,7 @@ from r2.controllers.oauth2 import OAuth2ResourceController, require_oauth2_scope
 from r2.lib.template_helpers import add_sr, get_domain
 from r2.lib.system_messages import notify_user_added
 from r2.controllers.ipn import generate_blob
+from r2.lib.lock import TimeoutExpired
 
 from r2.models import wiki
 from r2.lib.merge import ConflictException
@@ -135,7 +136,7 @@ class ApiController(RedditController, OAuth2ResourceController):
 
         """
 
-        c.dont_update_last_visit = True
+        c.update_last_visit = False
 
         links = []
         if link2:
@@ -199,7 +200,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                    VModhash(),
                    ip = ValidIP(),
                    to = VMessageRecipient('to'),
-                   subject = VRequired('subject', errors.NO_SUBJECT),
+                   subject = VLength('subject', 100, empty_error=errors.NO_SUBJECT),
                    body = VMarkdown(['text', 'message']))
     @api_doc(api_section.messages)
     def POST_compose(self, form, jquery, to, subject, body, ip):
@@ -210,6 +211,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                                 errors.NO_USER, errors.SUBREDDIT_NOEXIST,
                                 errors.USER_BLOCKED) or
                 form.has_errors("subject", errors.NO_SUBJECT) or
+                form.has_errors("subject", errors.TOO_LONG) or
                 form.has_errors("text", errors.NO_TEXT, errors.TOO_LONG) or
                 form.has_errors("captcha", errors.BAD_CAPTCHA)):
 
@@ -759,6 +761,8 @@ class ApiController(RedditController, OAuth2ResourceController):
     @api_doc(api_section.subreddits)
     def POST_accept_moderator_invite(self, form, jquery, ip):
         if not c.site.remove_moderator_invite(c.user):
+            c.errors.add(errors.NO_INVITE_FOUND)
+            form.set_error(errors.NO_INVITE_FOUND, None)
             return
 
         ModAction.create(c.site, c.user, "acceptmoderatorinvite")
@@ -984,6 +988,17 @@ class ApiController(RedditController, OAuth2ResourceController):
 
         # flag search indexer that something has changed
         changed(thing)
+
+    @require_oauth2_scope("modposts")
+    @validatedForm(VUser(),
+                   VModhash(),
+                   VSrCanBan('id'),
+                   thing=VByName('id'),
+                   state=VBoolean('state'))
+    def POST_set_contest_mode(self, form, jquery, thing, state):
+        thing.contest_mode = state
+        thing._commit()
+        jquery.refresh()
 
     @noresponse(VUser(), VModhash(),
                 thing = VByName('id'))
@@ -2114,69 +2129,65 @@ class ApiController(RedditController, OAuth2ResourceController):
         `pv_hex` is part of the reddit gold "previous visits" feature. It is
         optional and deprecated.
 
+        **NOTE:** you may only make one request at a time to this API endpoint.
+        Higher concurrency will result in an error being returned.
+
         """
 
         CHILD_FETCH_COUNT = 20
 
-        user = c.user if c.user_is_loggedin else None
+        lock = None
+        if c.user_is_loggedin:
+            lock = g.make_lock("morechildren", "morechildren-" + c.user.name,
+                               timeout=0)
+            try:
+                lock.acquire()
+            except TimeoutExpired:
+                abort(429)
 
-        mc_key = "morechildren-%s" % request.ip
         try:
-            count = g.cache.incr(mc_key)
-        except:
-            g.cache.set(mc_key, 1, time=30)
-            count = 1
-
-        # Anything above 15 hits in 30 seconds violates the
-        # "1 request per 2 seconds" rule of the API
-        if count > 15:
-            if user:
-                name = user.name
-            else:
-                name = "(unlogged user)"
-            g.log.warning("%s on %s hit morechildren %d times in 30 seconds"
-                          % (name, request.ip, count))
-            # TODO: redirect to rickroll or something
-
-        if not link or not link.subreddit_slow.can_view(user):
-            return abort(403,'forbidden')
-
-        if pv_hex:
-            c.previous_visits = g.cache.get(pv_hex)
-
-        if children:
-            builder = CommentBuilder(link, CommentSortMenu.operator(sort),
-                                     children)
-            listing = Listing(builder, nextprev = False)
-            items = listing.get_items(num=CHILD_FETCH_COUNT)
-            def _children(cur_items):
-                items = []
-                for cm in cur_items:
-                    items.append(cm)
-                    if hasattr(cm, 'child'):
-                        if hasattr(cm.child, 'things'):
-                            items.extend(_children(cm.child.things))
-                            cm.child = None
-                        else:
-                            items.append(cm.child)
-
-                return items
-            # assumes there is at least one child
-            # a = _children(items[0].child.things)
-            a = []
-            for item in items:
-                a.append(item)
-                if hasattr(item, 'child'):
-                    a.extend(_children(item.child.things))
-                    item.child = None
-
-            # the result is not always sufficient to replace the 
-            # morechildren link
-            jquery.things(str(mc_id)).remove()
-            jquery.insert_things(a, append = True)
+            if not link or not link.subreddit_slow.can_view(c.user):
+                return abort(403,'forbidden')
 
             if pv_hex:
-                jquery.rehighlight_new_comments()
+                c.previous_visits = g.cache.get(pv_hex)
+
+            if children:
+                builder = CommentBuilder(link, CommentSortMenu.operator(sort),
+                                         children)
+                listing = Listing(builder, nextprev = False)
+                items = listing.get_items(num=CHILD_FETCH_COUNT)
+                def _children(cur_items):
+                    items = []
+                    for cm in cur_items:
+                        items.append(cm)
+                        if hasattr(cm, 'child'):
+                            if hasattr(cm.child, 'things'):
+                                items.extend(_children(cm.child.things))
+                                cm.child = None
+                            else:
+                                items.append(cm.child)
+
+                    return items
+                # assumes there is at least one child
+                # a = _children(items[0].child.things)
+                a = []
+                for item in items:
+                    a.append(item)
+                    if hasattr(item, 'child'):
+                        a.extend(_children(item.child.things))
+                        item.child = None
+
+                # the result is not always sufficient to replace the
+                # morechildren link
+                jquery.things(str(mc_id)).remove()
+                jquery.insert_things(a, append = True)
+
+                if pv_hex:
+                    jquery.rehighlight_new_comments()
+        finally:
+            if lock:
+                lock.release()
 
 
     @validate(uh = nop('uh'), # VModHash() will raise, check manually
@@ -2303,6 +2314,10 @@ class ApiController(RedditController, OAuth2ResourceController):
         user = Account._by_fullname(token.user_id)
         if not token.valid_for_user(user):
             form.redirect('/password?expired=true')
+            return
+
+        # Prevent banned users from resetting, and thereby logging in
+        if user._banned:
             return
 
         # successfully entered user name and valid new password

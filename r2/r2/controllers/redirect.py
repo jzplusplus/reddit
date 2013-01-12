@@ -19,7 +19,6 @@
 # All portions of the code written by reddit are Copyright (c) 2006-2012 reddit
 # Inc. All Rights Reserved.
 ###############################################################################
-from pylons import c
 from pylons.controllers.util import abort, redirect_to
 
 from r2.lib.base import BaseController
@@ -45,3 +44,6 @@ class RedirectController(BaseController):
         else:
             rest = ''
         return redirect_to("/r/t:%s/%s" % (tr_name, rest), _code=301)
+
+    def GET_gilded_comments(self):
+        return redirect_to("/r/all/comments/gilded", _code=301)

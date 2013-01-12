@@ -20,35 +20,34 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
-from threading import Thread
-import os
-import time
 import json
+import os
 
+from pylons import g, request, response
 from pylons.controllers.util import abort
-from pylons import c, g, response
 
-from reddit_base import MinimalController
-from r2.lib.amqp import worker
-from r2.lib.validator import *
+from r2.controllers.reddit_base import MinimalController
 from r2.lib import promote
 
 
 class HealthController(MinimalController):
-    def post(self):
-        pass
-
     def try_pagecache(self):
         pass
 
     def pre(self):
         pass
 
+    def post(self):
+        pass
+
     def GET_health(self):
-        c.dontcache = True
-        response.headers['Content-Type'] = 'text/plain'
+        if os.path.exists("/var/opt/reddit/quiesce"):
+            request.environ["usable_error_content"] = "No thanks, I'm full."
+            abort(503)
+
+        response.content_type = "application/json"
         return json.dumps(g.versions, sort_keys=True, indent=4)
 
     def GET_promohealth(self):
-        response.headers['Content-Type'] = 'text/plain'
+        response.content_type = "application/json"
         return json.dumps(promote.health_check())

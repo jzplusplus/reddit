@@ -31,6 +31,7 @@ from r2.lib.utils        import constant_time_compare, canonicalize_email
 from r2.lib.cache        import sgm
 from r2.lib import filters
 from r2.lib.log import log_text
+from r2.lib.zookeeper import LiveDict
 from r2.models.last_modified import LastModified
 
 from pylons import c, g, request
@@ -182,13 +183,6 @@ class Account(Thing):
         karma = self.link_karma
         return max(karma, 1) if karma > -1000 else karma
 
-    def can_wiki(self, default=False):
-        if self.wiki_override is None:
-            if not default:
-                return self.link_karma > 100 or self.comment_karma > 100
-            return default
-        return self.wiki_override
-
     def all_karmas(self):
         """returns a list of tuples in the form (name, hover-text, link_karma,
         comment_karma)"""
@@ -206,7 +200,7 @@ class Account(Thing):
                            self._t.get(sr_name + link_suffix, 0),
                            self._t.get(sr_name + comment_suffix, 0)))
 
-        karmas.sort(key = lambda x: abs(x[2] + x[3]), reverse=True)
+        karmas.sort(key = lambda x: x[2] + x[3], reverse=True)
 
         old_link_karma = self._t.get('link_karma', 0)
         old_comment_karma = self._t.get('comment_karma', 0)
@@ -554,11 +548,9 @@ class Account(Thing):
                 canons_by_subdomain[whole].extend(canons)
                 parts.pop(0)
 
-        banned_subdomains = {}
-        sub_dict = g.hardcache.get_multi(canons_by_subdomain.keys(),
-                                         prefix="domain-")
-        for subdomain, d in sub_dict.iteritems():
-            if d and d.get("no_email", None):
+        for subdomain, d in g.banned_domains.iteritems():
+            if(d and d.get("no_email", None) and
+                    subdomain in canons_by_subdomain):
                 for canon in canons_by_subdomain[subdomain]:
                     rv[canon] = "domain"
 

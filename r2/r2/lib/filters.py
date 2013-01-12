@@ -24,13 +24,16 @@ import cgi
 import os
 import urllib
 import re
+
+from collections import Counter
+
 import snudown
 from cStringIO import StringIO
 
 from xml.sax.handler import ContentHandler
 from lxml.sax import saxify
 import lxml.etree
-from BeautifulSoup import BeautifulSoup
+from BeautifulSoup import BeautifulSoup, Tag
 
 from pylons import g, c
 
@@ -171,19 +174,19 @@ class SouptestSaxHandler(ContentHandler):
 
 markdown_ok_tags = {
     'div': ('class'),
-    'a': set(('href', 'title', 'target', 'nofollow')),
-    
+    'a': set(('href', 'title', 'target', 'nofollow', 'rel')),
+    'img': set(('src', 'alt')),
     }
 
 markdown_boring_tags =  ('p', 'em', 'strong', 'br', 'ol', 'ul', 'hr', 'li',
                          'pre', 'code', 'blockquote', 'center',
                           'sup', 'del', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',)
 
-markdown_user_tags = ('table', 'th', 'tr', 'td', 'tbody', 'img',
+markdown_user_tags = ('table', 'th', 'tr', 'td', 'tbody',
                      'tbody', 'thead', 'tr', 'tfoot', 'caption')
 
 for bt in markdown_boring_tags:
-    markdown_ok_tags[bt] = ()
+    markdown_ok_tags[bt] = ('id')
 
 for bt in markdown_user_tags:
     markdown_ok_tags[bt] = ('colspan', 'rowspan', 'cellspacing', 'cellpadding', 'align', 'scope')
@@ -194,11 +197,14 @@ markdown_xhtml_dtd_path = os.path.join(
 
 markdown_dtd = '<!DOCTYPE div- SYSTEM "file://%s">' % markdown_xhtml_dtd_path
 
-def markdown_souptest(text, nofollow=False, target=None):
+def markdown_souptest(text, nofollow=False, target=None, renderer=None):
     if not text:
         return text
-
-    smd = safemarkdown(text, nofollow=nofollow, target=target)
+    
+    if not renderer:
+        smd = safemarkdown(text, nofollow=nofollow, target=target)
+    elif renderer == 'wiki':
+        smd = wikimarkdown(text)
 
     # Prepend a DTD reference so we can load up definitions of all the standard
     # XHTML entities (&nbsp;, etc.).
@@ -249,17 +255,79 @@ def wikimarkdown(text):
     target = None
     
     text = snudown.markdown(_force_utf8(text), nofollow, target,
-                            renderer=snudown.RENDERER_WIKI, enable_toc=True)
+                            renderer=snudown.RENDERER_WIKI)
     
     # TODO: We should test how much of a load this adds to the app
-    soup = BeautifulSoup(text)
+    soup = BeautifulSoup(text.decode('utf-8'))
     images = soup.findAll('img')
     
     if images:
         [img_swap(image) for image in images]
-        text = str(soup)
+    
+    inject_table_of_contents(soup, prefix="wiki")
+    
+    text = str(soup)
     
     return SC_OFF + WIKI_MD_START + text + WIKI_MD_END + SC_ON
+
+title_re = re.compile('[^\w.-]')
+header_re = re.compile('^h[1-6]$')
+def inject_table_of_contents(soup, prefix):
+    header_ids = Counter()
+    headers = soup.findAll(header_re)
+    if not headers:
+        return
+    tocdiv = Tag(soup, "div", [("class", "toc")])
+    parent = Tag(soup, "ul")
+    parent.level = 0
+    tocdiv.append(parent)
+    level = 0
+    previous = 0
+    for header in headers:
+        contents = u''.join(header.findAll(text=True))
+        
+        # In the event of an empty header, skip
+        if not contents:
+            continue
+        
+        # Convert html entities to avoid ugly header ids
+        aid = unicode(BeautifulSoup(contents, convertEntities=BeautifulSoup.XML_ENTITIES))
+        # Prefix with PREFIX_ to avoid ID conflict with the rest of the page
+        aid = u'%s_%s' % (prefix, aid.replace(" ", "_").lower())
+        # Convert down to ascii replacing special characters with hex
+        aid = str(title_re.sub(lambda c: '.%X' % ord(c.group()), aid))
+        
+        # Check to see if a tag with the same ID exists
+        id_num = header_ids[aid] + 1
+        header_ids[aid] += 1
+        # Only start numbering ids with the second instance of an id
+        if id_num > 1:
+            aid = '%s%d' % (aid, id_num)
+        
+        header['id'] = aid
+        
+        li = Tag(soup, "li")
+        a = Tag(soup, "a", [("href", "#%s" % aid)])
+        a.string = contents
+        li.append(a)
+        
+        thislevel = int(header.name[-1])
+        
+        if previous and thislevel > previous:
+            newul = Tag(soup, "ul")
+            newul.level = thislevel
+            parent.append(newul)
+            parent = newul
+            level += 1
+        elif level and thislevel < previous:
+            while level and parent.level > thislevel:
+                parent = parent.findParent("ul")
+                level -= 1
+        
+        previous = thislevel
+        parent.append(li)
+    
+    soup.insert(0, tocdiv)
 
 def keep_space(text):
     text = websafe(text)

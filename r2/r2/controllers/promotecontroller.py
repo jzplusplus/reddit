@@ -21,6 +21,7 @@
 ###############################################################################
 from datetime import datetime, timedelta
 
+import itertools
 import json
 
 from pylons import c, g, request
@@ -75,6 +76,27 @@ from r2.lib.validator import (
     VUrl,
 )
 from r2.models import Link, Message, NotFound, PromoCampaign, PromotionLog
+
+
+def _check_dates(dates):
+    params = ('startdate', 'enddate')
+    error_types = (errors.BAD_DATE,
+                   errors.BAD_FUTURE_DATE,
+                   errors.BAD_PAST_DATE,
+                   errors.BAD_DATE_RANGE,
+                   errors.DATE_RANGE_TOO_LARGE)
+    for error_case in itertools.product(error_types, params):
+        if error_case in c.errors:
+            bad_dates = dates
+            start, end = None, None
+            break
+    else:
+        bad_dates = None
+        start, end = dates
+    if not start or not end:
+        start = promote.promo_datetime_now(offset=-7).date()
+        end = promote.promo_datetime_now(offset=6).date()
+    return start, end, bad_dates
 
 
 class PromoteController(ListingController):
@@ -176,13 +198,25 @@ class PromoteController(ListingController):
         link = Link._byID(campaign.link_id)
         return self.redirect(promote.promo_edit_url(link))
 
-    @validate(VSponsor())
-    def GET_graph(self):
-        return PromotePage("graph", content=Promote_Graph()).render()
+    @validate(VSponsor(),
+              dates=VDateRange(["startdate", "enddate"],
+                               max_range=timedelta(days=28),
+                               required=False))
+    def GET_graph(self, dates):
+        start, end, bad_dates = _check_dates(dates)
+        return PromotePage("graph",
+                           content=Promote_Graph(
+                                start, end, bad_dates=bad_dates)
+                           ).render()
 
-    @validate(VSponsorAdmin())
-    def GET_admingraph(self):
-        content = Promote_Graph(admin_view=True)
+    @validate(VSponsorAdmin(),
+              dates=VDateRange(["startdate", "enddate"],
+                               max_range=timedelta(days=28),
+                               required=False))
+    def GET_admingraph(self, dates):
+        start, end, bad_dates = _check_dates(dates)
+        content = Promote_Graph(start, end, bad_dates=bad_dates,
+                                admin_view=True)
         if c.render_style == 'csv':
             return content.as_csv()
         return PromotePage("admingraph", content=content).render()
@@ -193,10 +227,12 @@ class PromoteController(ListingController):
         '''
         inv_start_date = promote.promo_datetime_now()
         inv_end_date = inv_start_date + timedelta(60)
-        inventory = promote.get_available_impressions(sr_name,
-                                                      inv_start_date,
-                                                      inv_end_date,
-                                                      fuzzed=(not c.user_is_admin))
+        inventory = promote.get_available_impressions(
+            sr_name,
+            inv_start_date,
+            inv_end_date,
+            fuzzed=(not c.user_is_admin)
+        )
         dates = []
         impressions = []
         max_imps = 0
@@ -403,7 +439,8 @@ class PromoteController(ListingController):
 
         start, end = dates or (None, None)
 
-        if start and end and not promote.is_accepted(l) and not c.user_is_sponsor:
+        if (start and end and not promote.is_accepted(l) and
+            not c.user_is_sponsor):
             # if the ad is not approved already, ensure the start date
             # is at least 2 days in the future
             start = start.date()
@@ -477,9 +514,10 @@ class PromoteController(ListingController):
                 return
             oversold = promote.is_roadblocked(sr.name, start, end)
             if oversold and not c.user_is_sponsor:
+                msg_params = {"start": oversold[0].strftime('%m/%d/%Y'),
+                              "end": oversold[1].strftime('%m/%d/%Y')}
                 c.errors.add(errors.OVERSOLD, field='sr',
-                             msg_params={"start": oversold[0].strftime('%m/%d/%Y'),
-                                           "end": oversold[1].strftime('%m/%d/%Y')})
+                             msg_params=msg_params)
                 form.has_errors('sr', errors.OVERSOLD)
                 return
         if targeting == 'none':
@@ -532,11 +570,9 @@ class PromoteController(ListingController):
                              traffic_url=promote.promo_traffic_url(thing),
                              title=thing.title)
                     msg = msg % d
-                    subk = msg % d
                     item, inbox_rel = Message._new(c.user, user,
                                                    subj, msg, request.ip)
-                    if g.write_query_queue:
-                        queries.new_message(item, inbox_rel)
+                    queries.new_message(item, inbox_rel)
 
 
     @validatedForm(VSponsor('container'),
@@ -648,9 +684,9 @@ class PromoteController(ListingController):
               dates=VDateRange(['startdate', 'enddate']),
               query_type=VOneOf('q', ('started_on', 'between'), default=None))
     def GET_admin(self, launchdate=None, dates=None, query_type=None):
-              return PromoAdminTool(query_type=query_type,
-                                    launchdate=launchdate,
-                                    start=dates[0],
-                                    end=dates[1]).render()
+        return PromoAdminTool(query_type=query_type,
+                              launchdate=launchdate,
+                              start=dates[0],
+                              end=dates[1]).render()
 
 

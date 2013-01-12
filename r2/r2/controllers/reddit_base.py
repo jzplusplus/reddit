@@ -20,6 +20,8 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
+import collections
+import json
 import locale
 import re
 import simplejson
@@ -74,6 +76,7 @@ from r2.lib.validator import (
     validate,
     VByName,
     VCount,
+    VLang,
     VLength,
     VLimit,
     VTarget,
@@ -101,8 +104,8 @@ from r2.models import (
 )
 
 
-NEVER = 'Thu, 31 Dec 2037 23:59:59 GMT'
-DELETE = 'Thu, 01-Jan-1970 00:00:01 GMT'
+NEVER = datetime(2037, 12, 31, 23, 59, 59)
+DELETE = datetime(1970, 01, 01, 0, 0, 1)
 
 cache_affecting_cookies = ('reddit_first', 'over18', '_options')
 
@@ -126,13 +129,38 @@ class Cookie(object):
         else:
             self.domain = g.domain
 
+    @staticmethod
+    def classify(cookie_name):
+        if cookie_name == g.login_cookie:
+            return "session"
+        elif cookie_name == g.admin_cookie:
+            return "admin"
+        elif cookie_name == "reddit_first":
+            return "first"
+        elif cookie_name == "over18":
+            return "over18"
+        elif cookie_name.endswith("_last_thing"):
+            return "last_thing"
+        elif cookie_name.endswith("_options"):
+            return "options"
+        elif cookie_name.endswith("_recentclicks2"):
+            return "clicks"
+        elif cookie_name.startswith("__utm"):
+            return "ga"
+        else:
+            return "other"
+
     def __repr__(self):
         return ("Cookie(value=%r, expires=%r, domain=%r, dirty=%r)"
                 % (self.value, self.expires, self.domain, self.dirty))
 
 class UnloggedUser(FakeAccount):
-    _cookie = 'options'
-    allowed_prefs = ('pref_content_langs', 'pref_lang', 'pref_frame_commentspanel')
+    COOKIE_NAME = "_options"
+    allowed_prefs = {
+        "pref_lang": VLang.validate_lang,
+        "pref_content_langs": VLang.validate_content_langs,
+        "pref_frame_commentspanel": bool,
+    }
 
     def __init__(self, browser_langs, *a, **kw):
         FakeAccount.__init__(self, *a, **kw)
@@ -156,21 +184,43 @@ class UnloggedUser(FakeAccount):
     def name(self):
         raise NotImplementedError
 
+    def _decode_json(self, json_blob):
+        data = json.loads(json_blob)
+        validated = {}
+        for k, v in data.iteritems():
+            validator = self.allowed_prefs.get(k)
+            if validator:
+                try:
+                    validated[k] = validator(v)
+                except ValueError:
+                    pass  # don't override defaults for bad data
+        return validated
+
     def _from_cookie(self):
-        z = read_user_cookie(self._cookie)
-        try:
-            d = simplejson.loads(decrypt(z))
-            return dict((k, v) for k, v in d.iteritems()
-                        if k in self.allowed_prefs)
-        except ValueError:
+        cookie = c.cookies.get(self.COOKIE_NAME)
+        if not cookie:
             return {}
 
+        try:
+            return self._decode_json(cookie.value)
+        except ValueError:
+            # old-style _options cookies are encrypted
+            try:
+                plaintext = decrypt(cookie.value)
+                values = self._decode_json(plaintext)
+            except (TypeError, ValueError):
+                # this cookie is totally invalid, delete it
+                c.cookies[self.COOKIE_NAME] = Cookie(value="", expires=DELETE)
+                return {}
+            else:
+                self._to_cookie(values)  # upgrade the cookie
+                return values
+
     def _to_cookie(self, data):
-        data = data.copy()
-        for k in data.keys():
-            if k not in self.allowed_prefs:
-                del k
-        set_user_cookie(self._cookie, encrypt(simplejson.dumps(data)))
+        allowed_data = {k: v for k, v in data.iteritems()
+                        if k in self.allowed_prefs}
+        jsonified = json.dumps(allowed_data, sort_keys=True)
+        c.cookies[self.COOKIE_NAME] = Cookie(value=jsonified)
 
     def _subscribe(self, sr):
         pass
@@ -297,8 +347,10 @@ def over18():
     else:
         if 'over18' in c.cookies:
             cookie = c.cookies['over18'].value
-            if cookie == sha1(request.ip).hexdigest():
+            if cookie == "1":
                 return True
+            else:
+                c.cookies["over18"] = Cookie(value="", expires=DELETE)
 
 def set_obey_over18():
     "querystring parameter for API to obey over18 filtering rules"
@@ -375,9 +427,14 @@ def set_content_type():
     if e.has_key('extension'):
         c.extension = ext = e['extension']
         if ext in ('embed', 'wired', 'widget'):
+            wrapper = request.params.get("callback", "document.write")
+            wrapper = filters._force_utf8(wrapper)
+            if not valid_jsonp_callback(wrapper):
+                abort(BadRequestError(errors.BAD_JSONP_CALLBACK))
+
             def to_js(content):
-                return utils.to_js(content, callback=request.params.get(
-                    "callback", "document.write"))
+                return wrapper + "(" + utils.string2js(content) + ");"
+
             c.response_wrapper = to_js
         if ext in ("rss", "api", "json") and request.method.upper() == "GET":
             user = valid_feed(request.GET.get("user"),
@@ -480,10 +537,6 @@ def set_cnameframe():
         or not request.host.split(":")[0].endswith(g.domain)):
         c.cname = True
         request.environ['REDDIT_CNAME'] = 1
-        if request.params.has_key(utils.UrlParser.cname_get):
-            del request.params[utils.UrlParser.cname_get]
-        if request.get.has_key(utils.UrlParser.cname_get):
-            del request.get[utils.UrlParser.cname_get]
     c.frameless_cname = request.environ.get('frameless_cname', False)
     if hasattr(c.site, 'domain'):
         c.authorized_cname = request.environ.get('authorized_cname', False)
@@ -639,7 +692,7 @@ class MinimalController(BaseController):
         except CookieError:
             cookies_key = ''
 
-        return make_key('request_',
+        return make_key('request',
                         c.lang,
                         c.content_langs,
                         request.host,
@@ -653,7 +706,7 @@ class MinimalController(BaseController):
                         cookies_key)
 
     def cached_response(self):
-        return response.content
+        return ""
 
     def pre(self):
         action = request.environ["pylons.routes_dict"].get("action")
@@ -686,6 +739,8 @@ class MinimalController(BaseController):
         # GET param is included
         set_content_type()
         c.request_timer.intermediate("minimal-pre")
+        # True/False forces. None updates for most non-POST requests
+        c.update_last_visit = None
 
     def try_pagecache(self):
         #check content cache
@@ -694,25 +749,12 @@ class MinimalController(BaseController):
             if r:
                 r, c.cookies = r
                 response.headers = r.headers
-                response.content = r.content
+                response.body = r.body
+                response.status_int = r.status_int
 
-                for x in r.cookies.keys():
-                    if x in cache_affecting_cookies:
-                        cookie = r.cookies[x]
-                        response.set_cookie(key=x,
-                                            value=cookie.value,
-                                            domain=cookie.get('domain', None),
-                                            expires=cookie.get('expires', None),
-                                            path=cookie.get('path', None),
-                                            secure=cookie.get('secure', False),
-                                            httponly=cookie.get('httponly', False))
-
-                response.status_code = r.status_code
                 request.environ['pylons.routes_dict']['action'] = 'cached_response'
                 c.request_timer.name = request_timer_name("cached_response")
 
-                # make sure to carry over the content type
-                response.content_type = r.headers['content-type']
                 c.used_cache = True
                 # response wrappers have already been applied before cache write
                 c.response_wrapper = None
@@ -720,7 +762,11 @@ class MinimalController(BaseController):
     def post(self):
         c.request_timer.intermediate("action")
 
-        if c.response_wrapper:
+        # if the action raised an HTTPException (i.e. it aborted) then pylons
+        # will have replaced response with the exception itself.
+        is_exception_response = getattr(response, "_exception", False)
+
+        if c.response_wrapper and not is_exception_response:
             content = "".join(_force_utf8(x)
                               for x in tup(response.content) if x)
             wrapped_content = c.response_wrapper(content)
@@ -738,7 +784,8 @@ class MinimalController(BaseController):
             and request.method.upper() == 'GET'
             and (not c.user_is_loggedin or c.allow_loggedin_cache)
             and not c.used_cache
-            and response.status_code not in (429, 503)):
+            and response.status_int not in (429, 503)
+            and not is_exception_response):
             try:
                 g.pagecache.set(self.request_key(),
                                 (response._current_obj(), c.cookies),
@@ -761,11 +808,7 @@ class MinimalController(BaseController):
 
         end_time = datetime.now(g.tz)
 
-        # update last_visit
-        if (c.user_is_loggedin and not g.disallow_db_writes and
-            request.method.upper() != "POST" and
-            not c.dont_update_last_visit and
-            request.path != '/validuser'):
+        if self.should_update_last_visit():
             c.user.update_last_visit(c.start_time)
 
         check_request(end_time)
@@ -821,11 +864,25 @@ class MinimalController(BaseController):
         data = simplejson.dumps(kw)
         return filters.websafe_json(data)
 
+    def should_update_last_visit(self):
+        if g.disallow_db_writes:
+            return False
+
+        if not c.user_is_loggedin:
+            return False
+
+        if c.update_last_visit is not None:
+            return c.update_last_visit
+
+        return request.method.upper() != "POST"
+
 
 class RedditController(MinimalController):
 
     @staticmethod
     def login(user, rem=False):
+        # This can't be handled in post() due to PRG and ErrorController fun.
+        user.update_last_visit(c.start_time)
         c.cookies[g.login_cookie] = Cookie(value=user.make_cookie(),
                                            expires=NEVER if rem else None,
                                            httponly=True)
@@ -843,7 +900,6 @@ class RedditController(MinimalController):
     def remember_otp(user):
         cookie = user.make_otp_cookie()
         expiration = datetime.utcnow() + timedelta(seconds=g.OTP_COOKIE_TTL)
-        expiration = expiration.strftime("%a, %d %b %Y %H:%M:%S GMT")
         set_user_cookie(g.otp_cookie,
                         cookie,
                         secure=True,
@@ -861,16 +917,21 @@ class RedditController(MinimalController):
 
         # populate c.cookies unless we're on the unsafe media_domain
         if request.host != g.media_domain or g.media_domain == g.domain:
+            cookie_counts = collections.Counter()
             try:
                 for k, v in request.cookies.iteritems():
                     # minimalcontroller can still set cookies
                     if k not in c.cookies:
                         # we can unquote even if it's not quoted
                         c.cookies[k] = Cookie(value=unquote(v), dirty=False)
+                        cookie_counts[Cookie.classify(k)] += 1
             except CookieError:
                 #pylons or one of the associated retarded libraries
                 #can't handle broken cookies
                 request.environ['HTTP_COOKIE'] = ''
+
+            for cookietype, count in cookie_counts.iteritems():
+                g.stats.simple_event("cookie.%s" % cookietype, count)
 
         c.firsttime = firsttime()
 

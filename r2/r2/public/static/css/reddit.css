@@ -338,6 +338,10 @@ ul.flat-vert {text-align: left;}
 .drop-choices.tabdrop {margin-top: 2px;}
 .dropdown-title.tabdrop { display: none }
 
+.drop-choices .choice.hidden {
+    display: none;
+}
+
 .tabmenu {
     list-style-type: none;
     white-space: nowrap;
@@ -1113,6 +1117,16 @@ a.author { margin-right: 0.5em; }
     color: gray;
 }
 
+.commentarea .menuarea .toggle {
+    display: inline-block;
+}
+
+.commentarea .menuarea .toggle a {
+    color: gray;
+    font-weight: bold;
+    font-size: x-small;
+}
+
 .commentarea > .usertext {
     margin: 0 0 10px 10px;
     overflow: auto;
@@ -1389,10 +1403,17 @@ a.star { text-decoration: none; color: #ff8b60 }
 }
 
 .comment .score { font-size: x-small; }
-.comment .child {
+.comment .child, .comment .showreplies {
     margin-top: 10px; 
     margin-left: 15px; 
     border-left: 1px dotted #DDF;
+}
+
+.comment .showreplies {
+    display: block;
+    margin-top: 7px;
+    margin-bottom: 15px;
+    padding: 5px;
 }
 
 textarea.gray { color: gray; }
@@ -3071,7 +3092,8 @@ form input[type=radio] {margin: 2px .5em 0 0; }
 
 /*submit*/
 
-#url-field button {margin: 10px 5px 0 0;}
+#url-field #suggest-title { text-align: right; }
+#url-field button {margin: 10px 0 0 5px;}
 #url-field .title-status { color: red; font-size: small}
 
 .content.submit .info-notice {
@@ -3990,10 +4012,24 @@ ul.tabmenu.formtab {
 .traffic-table tfoot th,
 .traffic-table tfoot td { font-style: italic; }
 
-.traffic-table tr.max  { border: 2px solid #FF8B60; }
+.traffic-table tr.max  { border-width: 2px; border-style: solid; }
 .traffic-table tr.min  { border: 2px solid #336699; }
 .traffic-table tbody tr:nth-child(even) { background-color: #E0E0E0; }
 .traffic-table tr.mean { font-style: italic; border-top: 1px solid; }
+
+/* this injects a blank space between weeks so that weekly patterns
+ * are more visible. since the borders are collapsed, we need to use
+ * cell padding to achieve the effect. however, the zebra-striping of
+ * the table makes for ugly extra-wide stripes when a stripe and week
+ * gap coincide. the nth-child rules put the padding on the top of
+ * the next row instead of the bottom of the current one if the current
+ * one is a zebra stripe. */
+.traffic-table .dow-6 th,
+.traffic-table .dow-6 td { padding-bottom: 1em; }
+.traffic-table tr:nth-child(odd).dow-5 th,
+.traffic-table tr:nth-child(odd).dow-5 td { padding-top: 1em; }
+.traffic-table tr:nth-child(even).dow-6 th,
+.traffic-table tr:nth-child(even).dow-6 td { padding-bottom: 0; }
 
 .traffic-tables-side {
     float: left;
@@ -4616,41 +4652,43 @@ button.new-campaign:disabled { color: gray; }
 dt { margin-left: 10px; font-weight: bold;  }
 dd { margin-left: 20px;  }
 
-.calendar {
+.calendar-lead {
+    margin: 15px;
+}
+
+table.calendar {
     white-space: nowrap;
-    overflow: hidden; 
-    width: 100%; 
+    width: 90%;
+    margin-top: 20px;
     position: relative;
-    padding-top: 120px; 
-    padding-bottom: 100px; 
-    margin: 20px 0; 
+    padding-top: 120px;
+    padding-bottom: 100px;
+    empty-cells: show;
+    table-layout: fixed;
 }
 
-.calendar div.grid {
-    position: absolute;
-    top: 0px;
-    bottom: 0px;
-}
-
-.calendar div.grid.today {
+.calendar .today {
     background-color: yellow; 
 }
 
-.calendar div.grid div.header {
-    font-weight: bold; 
+.calendar thead tr {
     border-bottom: 2px solid gray;
-    text-align: center; 
 }
 
-.calendar div.grid + div.grid {
-    border-left: 1px dashed gray; 
+.calendar thead th, .calendar thead td {
+    font-weight: bold;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+.calendar td, .calendar th[scope="col"] {
+    border-left: 1px dashed gray;
 }
 
 .calendar .blob {
     margin: 0;
     padding: 0px; 
     z-index: 10; 
-    float: left;
     cursor: pointer; 
 }
 
@@ -4806,6 +4844,7 @@ dd { margin-left: 20px;  }
 .icon-menu .reddit-contributors:before,
 .icon-menu .reddit-modqueue:before,
 .giftgold a:before,
+.gilded-comments-link a:before,
 .infobar.gold:before,
 .gold-form h1.goldgift:before,
 .users-online:before,
@@ -5135,6 +5174,23 @@ body:not(.gold) .allminus-link {
 
 .allminus-link a {
     font-size: 1.15em;
+}
+
+.gilded-comments-link {
+    margin-top: 1em;
+}
+
+.gilded-comments-link a {
+    color: #9a7d2e;
+    font-weight: bold;
+    font-size: 1.15em;
+}
+
+.gilded-comments-link a:before {
+    height: 14px;
+    width: 14px;
+    margin: 0 6px 0 1px;
+    background-image: url(../gold-coin.png); /* SPRITE */
 }
 
 #per-sr-karma {

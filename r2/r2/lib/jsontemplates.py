@@ -191,9 +191,12 @@ class ThingJsonTemplate(JsonTemplate):
                     return thing.reported
                 ban_info = getattr(thing, "ban_info", {})
                 if attr == "banned_by":
-                    return ban_info.get("banner") if ban_info.get('moderator_banned') else True
+                    banner = (ban_info.get("banner")
+                              if ban_info.get('moderator_banned')
+                              else True)
+                    return banner if thing._spam else None
                 elif attr == "approved_by":
-                    return ban_info.get("unbanner")
+                    return ban_info.get("unbanner") if not thing._spam else None
 
         return getattr(thing, attr, None)
 
@@ -241,6 +244,7 @@ class IdentityJsonTemplate(ThingJsonTemplate):
                                                 comment_karma = "comment_karma",
                                                 is_gold = "gold",
                                                 is_mod = "is_mod",
+                                                over_18 = "pref_over_18",
                                                 )
 
     def thing_attr(self, thing, attr):
@@ -717,10 +721,20 @@ class SubredditSettingsTemplate(ThingJsonTemplate):
 class ModActionTemplate(ThingJsonTemplate):
     _data_attrs_ = dict(sr_id36='sr_id36',
                         mod_id36='mod_id36',
+                        id='_fullname',
+                        subreddit='sr_name',
+                        mod='author',
+                        created_utc='date',
                         action='action',
                         details='details',
                         description='description',
                         target_fullname='target_fullname')
+
+    def thing_attr(self, thing, attr):
+        if attr == 'date':
+            return (time.mktime(thing.date.astimezone(pytz.UTC).timetuple())
+                    - time.timezone)
+        return ThingJsonTemplate.thing_attr(self, thing, attr)
 
     def kind(self, wrapped):
         return 'modaction'

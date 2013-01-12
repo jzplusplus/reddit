@@ -323,6 +323,9 @@ class FrontController(RedditController, OAuth2ResourceController):
         # Used in template_helpers
         c.previous_visits = previous_visits
 
+        if article.contest_mode:
+            sort = "random"
+
         # finally add the comment listing
         displayPane.append(CommentPane(article, CommentSortMenu.operator(sort),
                                        comment, context, num, **kw))
@@ -352,7 +355,8 @@ class FrontController(RedditController, OAuth2ResourceController):
                            page_classes = ['comments-page'],
                            subtitle = subtitle,
                            subtitle_buttons = subtitle_buttons,
-                           nav_menus = [CommentSortMenu(default = sort)],
+                           nav_menus = [CommentSortMenu(default = sort),
+                                        LinkCommentsSettings(article)],
                            infotext = infotext).render()
         return res
 
@@ -390,7 +394,10 @@ class FrontController(RedditController, OAuth2ResourceController):
                        ).render()
         return res
 
+    @require_oauth2_scope("modconfig")
+    @api_doc(api_section.moderation)
     def GET_stylesheet(self):
+        """Fetches a subreddit's current stylesheet."""
         if g.css_killswitch:
             self.abort404()
 
@@ -1234,17 +1241,6 @@ class FormsController(RedditController):
             return self.abort404()
         self.disable_admin_mode(c.user)
         return self.redirect(dest)
-
-    def GET_validuser(self):
-        """checks login cookie to verify that a user is logged in and
-        returns their user name"""
-        response.content_type = 'text/plain'
-        if c.user_is_loggedin:
-            # Change cookie based on can_wiki trac permissions
-            perm = str(c.user.can_wiki(default=False))
-            return c.user.name + "," + perm
-        else:
-            return ""
 
     def _render_opt_in_out(self, msg_hash, leave):
         """Generates the form for an optin/optout page"""

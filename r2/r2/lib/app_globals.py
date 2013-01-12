@@ -57,7 +57,7 @@ from r2.lib.plugin import PluginLoader
 from r2.lib.stats import Stats, CacheStats, StatsCollectingConnectionPool
 from r2.lib.translation import get_active_langs, I18N_PATH
 from r2.lib.utils import config_gold_price, thread_dump
-
+from r2.lib.zookeeper import LiveDict
 
 LIVE_CONFIG_NODE = "/config/live"
 
@@ -107,7 +107,6 @@ class Globals(object):
             'max_comments',
             'max_comments_gold',
             'num_default_reddits',
-            'num_query_queue_workers',
             'max_sr_images',
             'num_serendipity',
             'sr_dropdown_threshold',
@@ -118,7 +117,7 @@ class Globals(object):
             'sr_banned_quota',
             'sr_wikibanned_quota',
             'sr_wikicontributor_quota',
-            'sr_moderator_quota',
+            'sr_moderator_invite_quota',
             'sr_contributor_quota',
             'sr_quota_time',
             'wiki_keep_recent_days',
@@ -136,15 +135,11 @@ class Globals(object):
 
         ConfigValue.bool: [
             'debug',
-            'translator',
             'log_start',
             'sqlprinting',
             'template_debug',
             'reload_templates',
             'uncompressedJS',
-            'enable_doquery',
-            'use_query_cache',
-            'write_query_queue',
             'css_killswitch',
             'db_create_tables',
             'disallow_db_writes',
@@ -184,6 +179,7 @@ class Globals(object):
             'allowed_pay_countries',
             'case_sensitive_domains',
             'reserved_subdomains',
+            'TRAFFIC_LOG_HOSTS',
         ],
 
         ConfigValue.choice: {
@@ -196,10 +192,6 @@ class Globals(object):
                  'QUORUM': CL_QUORUM
              },
         },
-
-        ConfigValue.days: [
-            'MODWINDOW',
-        ],
 
         config_gold_price: [
             'gold_month_price',
@@ -302,12 +294,6 @@ class Globals(object):
         if not self.amqp_host:
             raise ValueError("amqp_host not set in the .ini")
 
-        # This requirement doesn't *have* to be a requirement, but there are
-        # bugs at the moment that will pop up if you violate it
-        # XXX: get rid of these options. new query cache is always on.
-        if self.write_query_queue and not self.use_query_cache:
-            raise Exception("write_query_queue requires use_query_cache")
-
         if not self.cassandra_seeds:
             raise ValueError("cassandra_seeds not set in the .ini")
 
@@ -386,12 +372,16 @@ class Globals(object):
             self.throttles = LiveList(self.zookeeper, "/throttles",
                                       map_fn=ipaddress.ip_network,
                                       reduce_fn=ipaddress.collapse_addresses)
+            self.banned_domains = LiveDict(self.zookeeper, 
+                                           "/banned-domains",
+                                           watch=True)
         else:
             self.zookeeper = None
             parser = ConfigParser.RawConfigParser()
             parser.read([self.config["__file__"]])
             self.live_config = extract_live_config(parser, self.plugins)
             self.throttles = tuple()  # immutable since it's not real
+            self.banned_domains = dict()
         self.startup_timer.intermediate("zookeeper")
 
         ################# MEMCACHE

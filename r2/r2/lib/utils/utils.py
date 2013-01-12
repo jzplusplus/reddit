@@ -24,9 +24,10 @@ import os
 import base64
 import traceback
 import ConfigParser
+import codecs
 
 from urllib import unquote_plus
-from urllib2 import urlopen
+from urllib2 import urlopen, Request
 from urlparse import urlparse, urlunparse
 import signal
 from copy import deepcopy
@@ -254,19 +255,30 @@ def get_title(url):
         return None
 
     try:
-        opener = urlopen(url, timeout=15)
-        
-        # Attempt to find the title in the first 1kb
-        data = opener.read(1024)
-        title = extract_title(data)
-        
-        # Title not found in the first kb, try searching an additional 2kb
-        if not title:
-            data += opener.read(2048)
+        req = Request(url)
+        if g.useragent:
+            req.add_header('User-Agent', g.useragent)
+        opener = urlopen(req, timeout=15)
+
+        # determine the encoding of the response
+        for param in opener.info().getplist():
+            if param.startswith("charset="):
+                param_name, sep, charset = param.partition("=")
+                codec = codecs.getreader(charset)
+                break
+        else:
+            codec = codecs.getreader("utf-8")
+
+        with codec(opener, "ignore") as reader:
+            # Attempt to find the title in the first 1kb
+            data = reader.read(1024)
             title = extract_title(data)
-        
-        opener.close()
-        
+
+            # Title not found in the first kb, try searching an additional 10kb
+            if not title:
+                data += reader.read(10240)
+                title = extract_title(data)
+
         return title
 
     except:
@@ -283,7 +295,20 @@ def extract_title(data):
     if not title_bs or not title_bs.string:
         return
 
-    return title_bs.string.encode('utf-8').strip()
+    title = title_bs.string
+
+    # remove end part that's likely to be the site's name
+    # looks for last delimiter char between spaces in strings
+    # delimiters: |, -, emdash, endash,
+    #             left- and right-pointing double angle quotation marks
+    reverse_title = title[::-1]
+    to_trim = re.search(u'\s[\u00ab\u00bb\u2013\u2014|-]\s',
+                        reverse_title,
+                        flags=re.UNICODE)
+    if to_trim:
+        title = title[:-(to_trim.end())]
+
+    return title.encode('utf-8').strip()
     
 valid_schemes = ('http', 'https', 'ftp', 'mailto')
 valid_dns = re.compile('\A[-a-zA-Z0-9]+\Z')
@@ -647,15 +672,6 @@ class UrlParser(object):
         return urlunparse((u.scheme.lower(), netloc,
                            u.path, u.params, u.query, fragment))
 
-
-def to_js(content, callback="document.write", escape=True):
-    before = after = ''
-    if callback:
-        before = callback + "("
-        after = ");"
-    if escape:
-        content = string2js(content)
-    return before + content + after
 
 def pload(fname, default = None):
     "Load a pickled object from a file"

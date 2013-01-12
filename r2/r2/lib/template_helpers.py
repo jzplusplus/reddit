@@ -33,14 +33,9 @@ from copy import copy
 import random
 import urlparse
 import calendar
-from pylons import g, c
+from pylons import g, c, request
 from pylons.i18n import _, ungettext
-from paste.util.mimeparse import desired_matches
 
-def is_encoding_acceptable(encoding_to_check):
-    "Check if a content encoding is acceptable to the user agent."
-    header = request.headers.get('Accept-Encoding', '')
-    return 'gzip' in desired_matches(['gzip'], header)
 
 static_text_extensions = {
     '.js': 'js',
@@ -59,7 +54,7 @@ def static(path, allow_gzip=True):
     dirname, filename = os.path.split(path)
     extension = os.path.splitext(filename)[1]
     is_text = extension in static_text_extensions
-    can_gzip = is_text and is_encoding_acceptable('gzip')
+    can_gzip = is_text and 'gzip' in request.accept_encoding
     should_gzip = allow_gzip and can_gzip
 
     path_components = []
@@ -144,7 +139,7 @@ def js_config(extra_config=None):
           "loading": _("loading...")
         },
         "is_fake": isinstance(c.site, FakeSubreddit),
-        "tracking_domain": g.tracking_domain,
+        "fetch_trackers_url": g.fetch_trackers_url,
         "adtracker_url": g.adtracker_url,
         "clicktracker_url": g.clicktracker_url,
         "uitracker_url": g.uitracker_url,

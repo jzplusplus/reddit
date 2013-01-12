@@ -14,8 +14,8 @@ r.analytics = {
         $('form.gold-checkout').one('submit', this.fireGoldCheckout)
     },
 
-    fetchTrackingHashes: function(callback) {
-        var fullnames = []
+    fetchTrackingHashes: function() {
+        var fullnames = {}
 
         /*------------------------------------------* 
            Generates a trackingName like:
@@ -32,54 +32,65 @@ r.analytics = {
                     sponsorship = thing.data('sponsorship'),
                     campaign = thing.data('cid')
 
+                if (!fullname || fullname in r.analytics.trackers)
+                    return
+
+                var trackingName = fullname
+
                 if (sponsorship)
-                    fullname += '_' + sponsorship
+                    trackingName += '_' + sponsorship
 
                 // append a hyphen even if there's no campaign
-                fullname += '-' + (campaign || '')
+                trackingName += '-' + (campaign || '')
 
                 if (!r.config.is_fake)
-                    fullname += '-' + r.config.post_site
+                    trackingName += '-' + r.config.post_site
 
-                thing.data('trackingName', fullname)
-
-                if (!(fullname in r.analytics.trackers))
-                    fullnames.push(fullname)
+                thing.data('trackingName', trackingName)
+                fullnames[fullname] = trackingName
             })
 
-        $.ajax({
-            url: 'http://' + r.config.tracking_domain + '/fetch-trackers',
-            type: 'get',
-            dataType: 'jsonp',
-            data: { 'ids': fullnames },
-            success: function(data) {
-                $.extend(r.analytics.trackers, data)
-                callback()
-            }
-        })
+        var xhr = $.ajax({
+                url: r.config.fetch_trackers_url,
+                type: 'get',
+                dataType: 'jsonp',
+                data: { 'ids': _.values(fullnames) },
+                success: function(data) {
+                    $.extend(r.analytics.trackers, data)
+                }
+            })
+
+        _.each(fullnames, function(trackingName, fullname) {
+            this.trackers[fullname] = xhr
+        }, this)
     },
 
     fetchTrackersOrFirePixel: function(e) {
         var target = $(e.target),
             fullname = target.data('fullname')
 
-        if (fullname in this.trackers) {
-            this.fireTrackingPixel(target)
-        } else {
-            this.fetchTrackingHashes($.proxy(this, 'fireTrackingPixel', target))
+        if (!fullname)
+            return
+
+        if (!(fullname in this.trackers)) {
+            this.fetchTrackingHashes()
         }
+
+        $.when(this.trackers[fullname]).done(_.bind(function() {
+            this.fireTrackingPixel(target)
+        }, this))
     },
 
     fireTrackingPixel: function(thing) {
         if (thing.data('trackerFired'))
             return
 
-        var fullname = thing.data('trackingName'),
-            hash = this.trackers[fullname]
+        var trackingName = thing.data('trackingName'),
+            hash = this.trackers[trackingName]
 
         var pixel = new Image()
         pixel.src = r.config.adtracker_url + '?' + $.param({
-            'id': fullname,
+            'id': trackingName,
             'hash': hash,
             'r': Math.round(Math.random() * 2147483647) // cachebuster
         })
@@ -92,7 +103,7 @@ r.analytics = {
             old_html = link.html(),
             dest = link.attr('href'),
             click_url = r.config.clicktracker_url + '?' + $.param({
-            'id': fullname,
+            'id': trackingName,
             'hash': hash,
             'url': dest
         })

@@ -47,6 +47,7 @@ from r2.lib.merge import ConflictException
 from r2.lib.cache import CL_ONE
 from r2.lib.contrib.rcssmin import cssmin
 from r2.lib import s3cp
+from r2.models.query_cache import MergedCachedQuery
 
 import math
 
@@ -469,15 +470,9 @@ class Subreddit(Thing, Printable):
 
         return subreddits if return_dict else subreddits.values()
 
-    #rising uses this to know which subreddits to include, doesn't
-    #work for all/friends atm
-    def rising_srs(self):
-        if c.default_sr or not hasattr(self, '_id'):
-            user = c.user if c.user_is_loggedin else None
-            sr_ids = self.user_subreddits(user)
-        else:
-            sr_ids = (self._id,)
-        return sr_ids
+    def keep_for_rising(self, sr_id):
+        """Return whether or not to keep a thing in rising for this SR."""
+        return sr_id == self._id
 
     def get_links(self, sort, time):
         from r2.lib.db import queries
@@ -502,6 +497,10 @@ class Subreddit(Thing, Printable):
     def get_all_comments(self):
         from r2.lib.db import queries
         return queries.get_sr_comments(self)
+
+    def get_gilded_comments(self):
+        from r2.lib.db import queries
+        return queries.get_gilded_comments(self)
 
     @classmethod
     def get_modactions(cls, srs, mod=None, action=None):
@@ -834,6 +833,9 @@ class FakeSubreddit(Subreddit):
         self.title = ''
         self.link_flair_position = 'right'
 
+    def keep_for_rising(self, sr_id):
+        return False
+
     @property
     def _should_wiki(self):
         return False
@@ -859,6 +861,9 @@ class FakeSubreddit(Subreddit):
     def get_all_comments(self):
         from r2.lib.db import queries
         return queries.get_all_comments()
+
+    def get_gilded_comments(self):
+        raise NotImplementedError()
 
     def spammy(self):
         return False
@@ -887,7 +892,6 @@ class FriendsSR(FakeSubreddit):
 
     def get_links(self, sort, time):
         from r2.lib.db import queries
-        from r2.models import Link
 
         if not c.user_is_loggedin:
             raise UserRequiredException
@@ -897,31 +901,21 @@ class FriendsSR(FakeSubreddit):
         if not friends:
             return []
 
-        if g.use_query_cache:
-            # with the precomputer enabled, this Subreddit only supports
-            # being sorted by 'new'. it would be nice to have a
-            # cleaner UI than just blatantly ignoring their sort,
-            # though
-            sort = 'new'
-            time = 'all'
+        # with the precomputer enabled, this Subreddit only supports
+        # being sorted by 'new'. it would be nice to have a
+        # cleaner UI than just blatantly ignoring their sort,
+        # though
+        sort = 'new'
+        time = 'all'
 
-            friends = Account._byID(friends, return_dict=False)
+        friends = Account._byID(friends, return_dict=False)
 
-            crs = [queries.get_submitted(friend, sort, time)
-                   for friend in friends]
-            return queries.MergedCachedResults(crs)
-
-        else:
-            q = Link._query(Link.c.author_id == friends,
-                            sort = queries.db_sort(sort),
-                            data = True)
-            if time != 'all':
-                q._filter(queries.db_times[time])
-            return q
+        crs = [queries.get_submitted(friend, sort, time)
+               for friend in friends]
+        return queries.MergedCachedResults(crs)
 
     def get_all_comments(self):
         from r2.lib.db import queries
-        from r2.models import Comment
 
         if not c.user_is_loggedin:
             raise UserRequiredException
@@ -931,30 +925,27 @@ class FriendsSR(FakeSubreddit):
         if not friends:
             return []
 
-        if g.use_query_cache:
-            # with the precomputer enabled, this Subreddit only supports
-            # being sorted by 'new'. it would be nice to have a
-            # cleaner UI than just blatantly ignoring their sort,
-            # though
-            sort = 'new'
-            time = 'all'
+        # with the precomputer enabled, this Subreddit only supports
+        # being sorted by 'new'. it would be nice to have a
+        # cleaner UI than just blatantly ignoring their sort,
+        # though
+        sort = 'new'
+        time = 'all'
 
-            friends = Account._byID(friends,
-                                    return_dict=False)
+        friends = Account._byID(friends,
+                                return_dict=False)
 
-            crs = [queries.get_comments(friend, sort, time)
-                   for friend in friends]
-            return queries.MergedCachedResults(crs)
+        crs = [queries.get_comments(friend, sort, time)
+               for friend in friends]
+        return queries.MergedCachedResults(crs)
 
-        else:
-            q = Comment._query(Comment.c.author_id == friends,
-                               sort = desc('_date'),
-                               data = True)
-            return q
 
 class AllSR(FakeSubreddit):
     name = 'all'
     title = 'all subreddits'
+
+    def keep_for_rising(self, sr_id):
+        return True
 
     def get_links(self, sort, time):
         from r2.models import Link
@@ -975,8 +966,9 @@ class AllSR(FakeSubreddit):
         from r2.lib.db import queries
         return queries.get_all_comments()
 
-    def rising_srs(self):
-        return None
+    def get_gilded_comments(self):
+        from r2.lib.db import queries
+        return queries.get_all_gilded_comments()
 
 
 class AllMinus(AllSR):
@@ -986,6 +978,9 @@ class AllMinus(AllSR):
         AllSR.__init__(self)
         self.srs = srs
         self.sr_ids = [sr._id for sr in srs]
+
+    def keep_for_rising(self, sr_id):
+        return sr_id not in self.sr_ids
 
     @property
     def title(self):
@@ -1011,32 +1006,32 @@ class _DefaultSR(FakeSubreddit):
     path = '/'
     header = g.default_header_url
 
+    def _get_sr_ids(self):
+        if not c.defaultsr_cached_sr_ids:
+            user = c.user if c.user_is_loggedin else None
+            c.defaultsr_cached_sr_ids = Subreddit.user_subreddits(user)
+        return c.defaultsr_cached_sr_ids
+
+    def keep_for_rising(self, sr_id):
+        return sr_id in self._get_sr_ids()
+
     def is_moderator(self, user):
         return False
 
     def get_links_sr_ids(self, sr_ids, sort, time):
         from r2.lib.db import queries
-        from r2.models import Link
 
         if not sr_ids:
             return []
         else:
             srs = Subreddit._byID(sr_ids, data=True, return_dict = False)
 
-        if g.use_query_cache:
-            results = [queries.get_links(sr, sort, time)
-                       for sr in srs]
-            return queries.merge_results(*results)
-        else:
-            q = Link._query(Link.c.sr_id == sr_ids,
-                            sort = queries.db_sort(sort), data=True)
-            if time != 'all':
-                q._filter(queries.db_times[time])
-            return q
+        results = [queries.get_links(sr, sort, time)
+                   for sr in srs]
+        return queries.merge_results(*results)
 
     def get_links(self, sort, time):
-        user = c.user if c.user_is_loggedin else None
-        sr_ids = Subreddit.user_subreddits(user)
+        sr_ids = self._get_sr_ids()
         return self.get_links_sr_ids(sr_ids, sort, time)
 
     @property
@@ -1064,8 +1059,11 @@ class DefaultSR(_DefaultSR):
     def wiki_edit_karma(self):
         return self._base.wiki_edit_karma
     
+    def is_wikicontributor(self, user):
+        return self._base.is_wikicontributor(user)
+    
     def is_wikibanned(self, user):
-        return self._base.is_banned(user)
+        return self._base.is_wikibanned(user)
     
     def is_wikicreate(self, user):
         return self._base.is_wikicreate(user)
@@ -1073,6 +1071,10 @@ class DefaultSR(_DefaultSR):
     @property
     def _fullname(self):
         return "t5_6"
+    
+    @property
+    def images(self):
+        return self._base.images
     
     @property
     def _id36(self):
@@ -1122,6 +1124,9 @@ class MultiReddit(_DefaultSR):
         self.banned_sr_ids = [sr._id for sr in srs if sr._spam]
         self.kept_sr_ids = [sr._id for sr in srs if not sr._spam]
 
+    def keep_for_rising(self, sr_id):
+        return sr_id in self.kept_sr_ids
+
     def is_moderator(self, user):
         if not user:
             return False
@@ -1143,14 +1148,16 @@ class MultiReddit(_DefaultSR):
     def get_links(self, sort, time):
         return self.get_links_sr_ids(self.kept_sr_ids, sort, time)
 
-    def rising_srs(self):
-        return self.kept_sr_ids
-
     def get_all_comments(self):
         from r2.lib.db.queries import get_sr_comments, merge_results
         srs = Subreddit._byID(self.kept_sr_ids, return_dict=False)
         results = [get_sr_comments(sr) for sr in srs]
         return merge_results(*results)
+
+    def get_gilded_comments(self):
+        from r2.lib.db.queries import get_gilded_comments
+        queries = [get_gilded_comments(sr_id) for sr_id in self.kept_sr_ids]
+        return MergedCachedQuery(queries)
 
 class RandomReddit(FakeSubreddit):
     name = 'random'

@@ -52,7 +52,7 @@ from pylons.controllers.util import redirect_to
 import random
 from functools import partial
 
-class ListingController(RedditController):
+class ListingController(RedditController, OAuth2ResourceController):
     """Generalized controller for pages with lists of links."""
 
     # toggle skipping of links based on the users' save/hide/vote preferences
@@ -83,6 +83,10 @@ class ListingController(RedditController):
     #extra parameters to send to the render_cls constructor
     render_params = {}
     extra_page_classes = ['listing-page']
+
+    def pre(self):
+        self.check_for_bearer_token()
+        RedditController.pre(self)
 
     @property
     def menus(self):
@@ -180,6 +184,7 @@ class ListingController(RedditController):
 
     builder_wrapper = staticmethod(default_thing_wrapper())
 
+    @require_oauth2_scope("read")
     @base_listing
     @api_doc(api_section.listings, extensions=['json', 'xml'])
     def GET_listing(self, **env):
@@ -253,7 +258,8 @@ class HotController(FixListing, ListingController):
 
             if link_ids:
                 res = wrap_links(link_ids, wrapper=self.builder_wrapper,
-                                 num=1, keep_fn=lambda x: x.fresh, skip=True)
+                                 num=1, keep_fn=organic.keep_fresh_links,
+                                 skip=True)
                 res.parent_name = "promoted"
                 if res.things:
                     # store campaign id for tracking
@@ -273,7 +279,6 @@ class HotController(FixListing, ListingController):
                 pos = 0
             elif pos != 0:
                 pos = pos % len(spotlight_links)
-            spotlight_keep_fn = organic.keep_fresh_links
             num_links = organic.organic_length
 
             # If prefs allow it, mix in promoted links and sr discovery content
@@ -281,7 +286,6 @@ class HotController(FixListing, ListingController):
                 if g.live_config['sr_discovery_links']:
                     spotlight_links.extend(g.live_config['sr_discovery_links'])
                     random.shuffle(spotlight_links)
-                    spotlight_keep_fn = lambda l: promote.is_promo(l) or organic.keep_fresh_links(l)
                     num_links = len(spotlight_links)
                 spotlight_links, pos, campaigns_by_link = promote.insert_promoted(spotlight_links,
                                                                                   pos) 
@@ -308,7 +312,7 @@ class HotController(FixListing, ListingController):
             b = IDBuilder(disp_links,
                           wrap = self.builder_wrapper,
                           num = num_links,
-                          keep_fn = spotlight_keep_fn,
+                          keep_fn = organic.keep_fresh_links,
                           skip = True)
 
             try:
@@ -351,8 +355,8 @@ class HotController(FixListing, ListingController):
 
     def query(self):
         #no need to worry when working from the cache
-        if g.use_query_cache or isinstance(c.site, DefaultSR):
-            self.fix_listing = False
+        # TODO: just remove this then since we're always using the query cache
+        self.fix_listing = False
 
         if isinstance(c.site, DefaultSR):
             if c.user_is_loggedin:
@@ -369,13 +373,6 @@ class HotController(FixListing, ListingController):
 
         elif isinstance(c.site, MultiReddit):
             return normalized_hot(c.site.kept_sr_ids, obey_age_limit=False)
-
-        #if not using the query_cache we still want cached front pages
-        elif (not g.use_query_cache
-              and not isinstance(c.site, FakeSubreddit)
-              and self.after is None
-              and self.count == 0):
-            return get_hot([c.site])
         else:
             return c.site.get_links('hot', 'all')
 
@@ -390,6 +387,7 @@ class HotController(FixListing, ListingController):
     def title(self):
         return c.site.title
 
+    @require_oauth2_scope("read")
     @listing_api_doc(uri='/hot')
     def GET_listing(self, **env):
         self.requested_ad = request.get.get('ad')
@@ -438,6 +436,7 @@ class NewController(ListingController):
         # point. Now just redirect to GET mode.
         return self.redirect(request.fullpath + query_string(dict(sort=sort)))
 
+    @require_oauth2_scope("read")
     @validate(sort = VMenu('controller', NewMenu))
     @listing_api_doc(uri='/new')
     def GET_listing(self, sort, **env):
@@ -472,6 +471,7 @@ class BrowseController(ListingController):
         return self.redirect(
             request.fullpath + query_string(dict(sort=sort, t=t)))
 
+    @require_oauth2_scope("read")
     @validate(t = VMenu('sort', ControversyTimeMenu))
     @listing_api_doc(uri='/{sort}', uri_variants=['/top', '/controversial'])
     def GET_listing(self, sort, t, **env):
@@ -515,6 +515,7 @@ class ByIDController(ListingController):
     def query(self):
         return self.names
 
+    @require_oauth2_scope("read")
     @validate(links = VByName("names", thing_cls = Link, multiple = True))
     def GET_listing(self, links, **env):
         if not links:
@@ -657,7 +658,7 @@ class UserController(ListingController):
               time = VMenu('t', TimeMenu, remember = False))
     @listing_api_doc(section=api_section.users, uri='/user/{username}/{where}',
                      uri_variants=['/user/{username}/' + where for where in [
-                                       'overview', 'submitted', 'commented',
+                                       'overview', 'submitted', 'comments',
                                        'liked', 'disliked', 'hidden', 'saved']])
     def GET_listing(self, where, vuser, sort, time, **env):
         self.where = where
@@ -719,17 +720,13 @@ class UserController(ListingController):
             dest += "?" + query_string
         return redirect_to(dest)
 
-class MessageController(ListingController, OAuth2ResourceController):
+class MessageController(ListingController):
     show_nums = False
     render_cls = MessagePage
     allow_stylesheets = False
     # note: this intentionally replaces the listing-page class which doesn't
     # conceptually fit for styling these pages.
     extra_page_classes = ['messages-page']
-
-    def pre(self):
-        self.check_for_bearer_token()
-        ListingController.pre(self)
 
     @property
     def show_sidebar(self):
@@ -1044,6 +1041,7 @@ class CommentsController(ListingController):
     def query(self):
         return c.site.get_all_comments()
 
+    @require_oauth2_scope("read")
     def GET_listing(self, **env):
         c.profilepage = True
         return ListingController.GET_listing(self, **env)
@@ -1052,9 +1050,18 @@ class CommentsController(ListingController):
 class GildedController(ListingController):
     title_text = _("gilded comments")
 
-    def query(self):
-        return queries.get_gilded_comments()
+    def keep_fn(self):
+        def keep(item):
+            return item.gildings > 0 and not item._deleted and not item._spam
+        return keep
 
+    def query(self):
+        try:
+            return c.site.get_gilded_comments()
+        except NotImplementedError:
+            abort(404)
+
+    @require_oauth2_scope("read")
     def GET_listing(self, **env):
         c.profilepage = True
         return ListingController.GET_listing(self, **env)

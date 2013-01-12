@@ -66,10 +66,6 @@
   %if c.lang_rtl:
     <link rel="stylesheet" href="${static(g.stylesheet_rtl)}"
           type="text/css" />
-    %if g.translator and request.get.get('css'):
-      <link rel="stylesheet" href="${request.get.get('css')}"
-            type="text/css" />
-    %endif
     %if c.site.stylesheet_rtl:
       <link rel="stylesheet" href="${static(c.site.stylesheet_rtl)}"
             type="text/css" />
@@ -166,6 +162,7 @@
       %endif
     %endif
     ${framebuster()}
+    <p class="bottommenu debuginfo"><span class="icon">&pi;</span>&nbsp;<span class="content">Rendered by PID ${g.reddit_pid} on ${g.reddit_host} at ${c.start_time} running ${g.short_version}.</span></p>
   </body>
 </%def>
 
