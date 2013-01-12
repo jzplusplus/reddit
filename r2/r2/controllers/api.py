@@ -600,7 +600,8 @@ class ApiController(RedditController, OAuth2ResourceController):
         containers = []
         if type == 'contributor':
             if container.name == g.central_sr or container.name == g.secret_central_sr:
-                print 'Removing from all subs'
+                print 'Removing from all subs and removing reddit gold' 
+                admintools.degolden(victim)
                 q = Subreddit._query()
                 for sr in utils.fetch_things2(q):
                     containers.append(sr)
@@ -667,7 +668,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                 if container.add_subscriber(friend):
                     container._incr('_ups', 1)
                 changed(container, True)
-                admintools.engolden(friend, 1500)
+                admintools.engolden(friend, 10000)
                 q = Subreddit._query()
                 subSecrets = (container.name == g.secret_central_sr)
                 for sr in utils.fetch_things2(q):
