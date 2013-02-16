@@ -307,7 +307,8 @@ class Subreddit(Thing, Printable):
         key = 'get_accounts_active-' + self._id36
 
         # Fuzz counts having low values, for privacy reasons
-        if count < 100 and not c.user_is_admin:
+        #Fuzzing disabled because we don't need it
+        if False:#count < 100 and not c.user_is_admin:
             fuzzed = True
             cached_count = g.cache.get(key)
             if not cached_count:
@@ -581,7 +582,24 @@ class Subreddit(Thing, Printable):
 
         sr_ids = sr_pops.pop_reddits(lang, over18, over18_only, filter_allow_top = filter_allow_top)
         sr_ids = sr_ids[:limit]
+        
+        return (sr_ids if ids
+                else Subreddit._byID(sr_ids, data=True, return_dict=False, stale=stale))
 
+    @classmethod
+    def top_user_srs(cls, lang, limit, filter_allow_top = False, over18 = True,
+                     over18_only = False, ids=False, stale=False):
+        from r2.lib import sr_pops
+        lang = tup(lang)
+
+        if c.user_is_loggedin:
+            sr_ids = Subreddit.special_reddits(c.user, 'contributor')
+        else:
+            sr_ids = []
+
+        sr_ids = [sr for sr in sr_ids if Subreddit._byID(sr, data=True, return_dict=False, stale=stale).name != 'promos']
+         
+        sr_ids = sr_ids[:limit]
         return (sr_ids if ids
                 else Subreddit._byID(sr_ids, data=True, return_dict=False, stale=stale))
 
@@ -656,7 +674,7 @@ class Subreddit(Thing, Printable):
 
     @classmethod
     def random_reddit(cls, limit = 2500, over18 = False):
-        srs = cls.top_lang_srs(c.content_langs, limit,
+        srs = cls.top_user_srs(c.content_langs, limit,
                                filter_allow_top = False,
                                over18 = over18,
                                over18_only = over18,

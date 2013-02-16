@@ -720,6 +720,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                 subSecrets = (container.name == g.secret_central_sr)
                 for sr in utils.fetch_things2(q):
                     #print sr.name + ': ' + str(sr.name not in g.secret_srs)
+                    if sr.name == 'promos': continue
                     if subSecrets or sr.name not in g.secret_srs:
                         containers.append(sr)
         else:
