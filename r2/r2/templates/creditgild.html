@@ -20,24 +20,22 @@
 ## reddit Inc. All Rights Reserved.
 ###############################################################################
 
-<% from r2.lib.template_helpers import static %>
+<%namespace file="goldpayment.html" import="stripe_form"/>
 
-<div class="content over18" style="text-align: center">
-  <p class="error">
-    ${_("you must be at least eighteen to view this reddit")}
-  </p>
-  <img src="${static('over18.png')}" alt="" height="254" width="180" />
-  
-  <form method="post" action="" class="pretty-form"
-      ${"target='_top'" if c.cname else ""}>
-    <input type="hidden" name="uh" value="${c.modhash}" />
-    <p>
-      ${_("are you over eighteen and willing to see adult content?")}
-    </p>
-    <p>
-      <button type="submit" name="over18" value="yes">yes</button>
-      <button type="submit" name="over18" value="no">no</button>
-    </p>
-  </form>
+<%
+   from r2.lib.filters import unsafe, safemarkdown
+   from r2.lib.template_helpers import static
+%>
+
+<div class="gold-form gold-payment">
+  <div class="roundfield">
+    <img src="${static('reddit_gold-70.png')}" class="gold-logo">
+    <div class="roundfield-content">
+      ${unsafe(safemarkdown(thing.summary, wrap=False))}
+      <div class="giftmessage">
+        ${unsafe(safemarkdown(thing.comment.body))}
+      </div>
+      ${stripe_form(display=True)}
+    </div>
+  </div>
 </div>
-

@@ -34,13 +34,13 @@ from r2.lib.db.operators import asc, desc
 from r2.lib.template_helpers import add_sr
 from r2.lib.jsonresponse import JQueryResponse, JsonResponse
 from r2.lib.log import log_text
+from r2.lib.permissions import ModeratorPermissionSet
 from r2.models import *
 from r2.lib.authorize import Address, CreditCard
 from r2.lib.utils import constant_time_compare
 
-from r2.lib.errors import errors, UserRequiredException
+from r2.lib.errors import errors, RedditError, UserRequiredException
 from r2.lib.errors import VerifiedUserRequiredException
-from r2.lib.errors import GoldRequiredException
 
 from copy import copy
 from datetime import datetime, timedelta
@@ -167,19 +167,29 @@ def set_api_docs(fn, simple_vals, param_vals):
         param_info.update(validator.param_docs())
     doc['parameters'] = param_info
 
-make_validated_kw = _make_validated_kw
 
 def validate(*simple_vals, **param_vals):
+    """Validation decorator that delegates error handling to the controller.
+
+    Runs the validators specified and calls self.on_validation_error to
+    process each error. This allows controllers to define their own fatal
+    error processing logic.
+    """
     def val(fn):
         @wraps(fn)
         def newfn(self, *a, **env):
             try:
                 kw = _make_validated_kw(fn, simple_vals, param_vals, env)
+            except RedditError as err:
+                self.on_validation_error(err)
+
+            for err in c.errors:
+                self.on_validation_error(c.errors[err])
+
+            try:
                 return fn(self, *a, **kw)
-            except UserRequiredException:
-                return self.intermediate_redirect('/login')
-            except VerifiedUserRequiredException:
-                return self.intermediate_redirect('/verify')
+            except RedditError as err:
+                self.on_validation_error(err)
 
         set_api_docs(newfn, simple_vals, param_vals)
         return newfn
@@ -859,25 +869,19 @@ class VTrafficViewer(VSponsor):
                 promote.is_traffic_viewer(thing, c.user))
 
 class VSrModerator(Validator):
-    def __init__(self, fatal=True, *a, **kw):
-        Validator.__init__(self, *a, **kw)
+    def __init__(self, fatal=True, perms=(), *a, **kw):
         # If True, abort rather than setting an error
         self.fatal = fatal
+        self.perms = utils.tup(perms)
+        super(VSrModerator, self).__init__(*a, **kw)
 
     def run(self):
-        if not (c.user_is_loggedin and c.site.is_moderator(c.user) 
+        if not (c.user_is_loggedin
+                and c.site.is_moderator_with_perms(c.user, *self.perms)
                 or c.user_is_admin):
             if self.fatal:
                 abort(403, "forbidden")
             return self.set_error('MODERATOR_REQUIRED', code=403)
-
-class VFlairManager(VSrModerator):
-    """Validates that a user is permitted to manage flair for a subreddit.
-       
-    Currently this is the same as VSrModerator. It's a separate class to act as
-    a placeholder if we ever need to give mods a way to delegate this aspect of
-    subreddit administration."""
-    pass
 
 class VCanDistinguish(VByName):
     def run(self, thing_name, how):
@@ -924,7 +928,7 @@ class VSrCanBan(VByName):
             # comment, because this should only be used on links and
             # comments
             subreddit = item.subreddit_slow
-            if subreddit.is_moderator(c.user):
+            if subreddit.is_moderator_with_perms(c.user, 'posts'):
                 return True
         abort(403,'forbidden')
 
@@ -1696,7 +1700,7 @@ class ValidIP(Validator):
 
 class VDate(Validator):
     """
-    Date checker that accepts string inputs in %m/%d/%Y format.
+    Date checker that accepts string inputs.
 
     Optional parameters include 'past' and 'future' which specify how
     far (in days) into the past or future the date must be to be
@@ -1712,12 +1716,15 @@ class VDate(Validator):
     def __init__(self, param, future=None, past = None,
                  sponsor_override = False,
                  reference_date = lambda : datetime.now(g.tz), 
-                 business_days = False):
+                 business_days = False,
+                 format = "%m/%d/%Y"):
         self.future = future
         self.past   = past
 
         # are weekends to be exluded from the interval?
         self.business_days = business_days
+
+        self.format = format
 
         # function for generating "now"
         self.reference_date = reference_date
@@ -1730,7 +1737,7 @@ class VDate(Validator):
         now = self.reference_date()
         override = c.user_is_sponsor and self.override
         try:
-            date = datetime.strptime(date, "%m/%d/%Y")
+            date = datetime.strptime(date, self.format)
             if not override:
                 # can't put in __init__ since we need the date on the fly
                 future = utils.make_offset_date(now, self.future,
@@ -2109,3 +2116,24 @@ class VOAuth2RefreshToken(Validator):
             return token
         else:
             return None
+
+class VPermissions(Validator):
+    types = dict(
+        moderator=ModeratorPermissionSet,
+        moderator_invite=ModeratorPermissionSet,
+    )
+
+    def __init__(self, type_param, permissions_param, *a, **kw):
+        Validator.__init__(self, (type_param, permissions_param), *a, **kw)
+
+    def run(self, type, permissions):
+        permission_class = self.types.get(type)
+        if not permission_class:
+            self.set_error(errors.INVALID_PERMISSION_TYPE, field=self.param[0])
+            return (None, None)
+        try:
+            perm_set = permission_class.loads(permissions, validate=True)
+        except ValueError:
+            self.set_error(errors.INVALID_PERMISSIONS, field=self.param[1])
+            return (None, None)
+        return type, perm_set

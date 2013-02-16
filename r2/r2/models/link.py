@@ -75,6 +75,7 @@ class Link(Thing, Printable):
                      comment_tree_id=0,
                      contest_mode=False,
                      skip_commentstree_q="",
+                     ignore_reports=False,
                      )
     _essentials = ('sr_id', 'author_id')
     _nsfw = re.compile(r"\bnsfw\b", re.I)
@@ -285,6 +286,7 @@ class Link(Thing, Printable):
         s.append(getattr(wrapped, 'media_object', {}))
         s.append(wrapped.flair_text)
         s.append(wrapped.flair_css_class)
+        s.append(wrapped.ignore_reports)
 
         # if browsing a single subreddit, incorporate link flair position
         # in the key so 'flair' buttons show up appropriately for mods
@@ -689,7 +691,9 @@ class Comment(Thing, Printable):
                      new=False,
                      gildings=0,
                      banned_before_moderator=False,
-                     parents=None)
+                     parents=None,
+                     ignore_reports=False,
+                     )
     _essentials = ('link_id', 'author_id')
 
     def _markdown(self):
@@ -1254,7 +1258,7 @@ class Message(Thing, Printable):
                 return True
             elif self.sr_id:
                 sr = Subreddit._byID(self.sr_id)
-                is_moderator = sr.is_moderator(c.user)
+                is_moderator = sr.is_moderator_with_perms(c.user, 'mail')
                 # moderators can view messages on subreddits they moderate
                 if is_moderator:
                     return True
@@ -1706,8 +1710,10 @@ class ModeratorInbox(Relation(Subreddit, Message)):
         if not sr._loaded:
             sr._load()
 
-        moderators = Account._byID(sr.moderator_ids(), data=True,
-                                   return_dict=False)
+        mod_perms = sr.moderators_with_perms()
+        mod_ids = set(mod_id for mod_id, perms in mod_perms.iteritems()
+                      if perms.get('mail', False))
+        moderators = Account._byID(mod_ids, data=True, return_dict=False)
         for m in moderators:
             if obj.author_id != m._id and not getattr(m, 'modmsgtime', None):
                 m.modmsgtime = obj._date

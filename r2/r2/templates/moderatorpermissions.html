@@ -20,24 +20,38 @@
 ## reddit Inc. All Rights Reserved.
 ###############################################################################
 
-<% from r2.lib.template_helpers import static %>
+<%namespace file="utils.html" import="error_field"/>
 
-<div class="content over18" style="text-align: center">
-  <p class="error">
-    ${_("you must be at least eighteen to view this reddit")}
-  </p>
-  <img src="${static('over18.png')}" alt="" height="254" width="180" />
-  
-  <form method="post" action="" class="pretty-form"
-      ${"target='_top'" if c.cname else ""}>
-    <input type="hidden" name="uh" value="${c.modhash}" />
-    <p>
-      ${_("are you over eighteen and willing to see adult content?")}
-    </p>
-    <p>
-      <button type="submit" name="over18" value="yes">yes</button>
-      <button type="submit" name="over18" value="no">no</button>
-    </p>
-  </form>
+<%def name="form_content()">
+  %if not thing.embedded:
+    <input type="hidden" name="name"
+      value="${thing.user.name if thing.user else ''}" />
+  %endif
+  <input type="hidden" name="type" value="${thing.permissions_type}">
+  <input type="hidden" name="permissions"
+    value="${thing.permissions.dumps() if thing.permissions else '+all'}">
+  %if not thing.embedded:
+    ${error_field("USER_DOESNT_EXIST", "name")}
+    ${error_field("NO_USER", "name")}
+  %endif
+  ${error_field("INVALID_PERMISSION_TYPE", "type")}
+  ${error_field("INVALID_PERMISSIONS", "permissions")}
+  %if not thing.embedded:
+    <span class="status"></span>
+  %endif
+</%def>
+
+<div class="permissions">
+  %if thing.embedded:
+    ${form_content()}
+  %else:
+    <form action="/post/setpermissions" method="post"
+          class="setpermissions pretty-form medium-text"
+          onsubmit="return post_form(this, 'setpermissions')">
+      ${form_content()}
+      <button type="submit">${_('save')}</button>
+    </form>
+  %endif
+  <div class="permission-summary">
+  </div>
 </div>
-

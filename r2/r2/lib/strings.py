@@ -33,6 +33,7 @@ from pylons.i18n import _, ungettext, get_lang
 import random
 import babel.numbers
 
+from r2.lib.permissions import ModeratorPermissionSet
 from r2.lib.translation import set_lang
 
 __all__ = ['StringHandler', 'strings', 'PluralManager', 'plurals',
@@ -110,9 +111,6 @@ string_dict = dict(
         invalid_property_list = _('invalid CSS property list "%(proplist)s"'),
         unknown_rule_type = _('unknown CSS rule type "%(ruletype)s"')
     ),
-    submit_box_text = _('for anything interesting: news, article, blog entry, video, picture, story, question...'),
-    submit_box_restricted_text = _('submission in this subreddit is restricted to approved submitters.'),
-    submit_box_archived_text = _('this subreddit is archived and no longer accepting submissions.'),
     permalink_title = _("%(author)s comments on %(title)s"),
     link_info_title = _("%(title)s : %(site)s"),
     banned_subreddit_title = _("this subreddit has been banned"),
@@ -149,7 +147,8 @@ string_dict = dict(
     gold_summary_creddits = _("You're about to purchase %(amount)s of reddit gold creddits. They work like gift certificates: each creddit you have will allow you to give one month of reddit gold to someone else."),
     gold_summary_signed_gift = _("You're about to give %(amount)s of reddit gold to %(recipient)s, who will be told that it came from you."),
     gold_summary_anonymous_gift = _("You're about to give %(amount)s of reddit gold to %(recipient)s. It will be an anonymous gift."),
-    gold_summary_comment_gift = _("Want to say thanks to *%(recipient)s* for this comment? Give them a month of [reddit gold](/help/gold)."),
+    gold_summary_comment_gift = _("Want to say thanks to *%(recipient)s* for this comment? Give them a month of [reddit gold](/gold/about)."),
+    gold_summary_comment_page = _("Give *%(recipient)s* a month of [reddit gold](/gold/about) for this comment:"),
     unvotable_message = _("sorry, this has been archived and can no longer be voted on"),
     account_activity_blurb = _("This page shows a history of recent activity on your account. If you notice unusual activity, you should change your password immediately. Location information is guessed from your computer's IP address and may be wildly wrong, especially for visits from mobile devices. Note: due to a bug, private-use addresses (starting with 10.) sometimes show up erroneously in this list after regular use of the site."),
     your_current_ip_is = _("You are currently accessing reddit from this IP address: %(address)s."),
@@ -185,6 +184,24 @@ Note: there are a couple of places outside of your subreddit where someone can c
     r_all_description = _("/r/all displays content from all of reddit, including subreddits you aren't subscribed to."),
     r_all_minus_description = _("Displaying content from /r/all of reddit, except the following subreddits:"),
     all_minus_gold_only = _('Filtering /r/all is a feature only available to [reddit gold](/gold/about) subscribers. Displaying unfiltered results from /r/all.'),
+
+    missing_credit_name = _("missing name"),
+    bad_credit_number = _("invalid credit card number"),
+    bad_credit_expiry = _("invalid expiration date"),
+    bad_credit_cvc = _("invalid cvc"),
+    missing_credit_address = _("missing address"),
+    missing_credit_city = _("missing city"),
+    missing_credit_state = _("missing state or province"),
+    missing_credit_zip = _("missing zip code"),
+
+    permissions = dict(
+        info=dict(
+            moderator=ModeratorPermissionSet.info,
+            moderator_invite=ModeratorPermissionSet.info,
+        ),
+        all_msg=_("full permissions"),
+        none_msg=_("no permissions"),
+    ),
 )
 
 class StringHandler(object):
@@ -194,6 +211,12 @@ class StringHandler(object):
     returned."""
     def __init__(self, **sdict):
         self.string_dict = sdict
+
+    def get(self, attr, default=None):
+        try:
+            return self[attr]
+        except KeyError:
+            return default
 
     def __getitem__(self, attr):
         try:
@@ -206,7 +229,7 @@ class StringHandler(object):
         if isinstance(rval, (str, unicode)):
             return _(rval)
         elif isinstance(rval, dict):
-            return dict((k, _(v)) for k, v in rval.iteritems())
+            return StringHandler(**rval)
         else:
             raise AttributeError
     

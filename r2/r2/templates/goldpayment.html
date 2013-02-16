@@ -35,6 +35,11 @@
     <img src="${static('reddit_gold-70.png')}" class="gold-logo">
     <div class="roundfield-content">
       ${unsafe(safemarkdown(thing.summary, wrap=False))}
+      %if thing.comment and not thing.clone_template:
+        <div class="giftmessage">
+          ${unsafe(safemarkdown(thing.comment.body))}
+        </div>
+      %endif
 
     %if thing.giftmessage:
       <p>${_("The following gift note will be attached:")}</p>
@@ -44,67 +49,194 @@
     %endif
 
     %if thing.pay_from_creddits:
-      <form id="giftgold" action="/api/spendcreddits" method="post"
-            class="content"
-            onsubmit="return post_form(this, 'spendcreddits');">
-        <input type="hidden" name="months" value="${thing.months}">
-        <input type="hidden" name="passthrough" value="${thing.passthrough}" class="passthrough">
-        <button class="btn gold-button">${_("give")}</button>
-        <span class="status"></span>
-        <div class="throbber"></div>
-      </form>
+      ${self.creddits_button()}
     %else:
       <p>${_("Please select a payment method.")}</p>
 
       %if thing.google_id:
-      <form action="https://checkout.google.com/api/checkout/v2/checkoutForm/Merchant/${thing.google_id}"
-            id="BB_BuyButtonForm" method="post" name="BB_BuyButtonForm"
-            class="gold-checkout google-checkout"
-            data-vendor="google-checkout"
-            target="${'_blank' if thing.clone_template else '_top'}">
-        <input name="item_name_1" type="hidden" value="creddits">
-        <input name="item_description_1" type="hidden"
-               %if thing.months != thing.quantity:
-                 value="${thing.quantity} year(s) of reddit gold"
-               %else:
-                 value="${thing.quantity} month(s) of reddit gold"
-               %endif
-               >
-        <input name="item_quantity_1" type="hidden"
-               value="${thing.quantity}">
-        <input name="item_price_1" type="hidden"
-               value="${thing.price}">
-        <input type="hidden"
-               name="shopping-cart.items.item-1.merchant-private-item-data"
-               value="${thing.passthrough}" class="passthrough">
-        <input name="item_currency_1" type="hidden" value="USD">
-        <input name="_charset_" type="hidden" value="utf-8">
-        <input type="hidden" name="analyticsdata" value="">
-        <button class="btn gold-button">${_("Google Checkout")}</button>
-      </form>
+        ${self.google_button()}
       %endif
 
-      <form action="https://www.paypal.com/cgi-bin/webscr" method="post"
-            class="gold-checkout"
-            data-vendor="paypal" target="${'_blank' if thing.clone_template else '_top'}">
-        <input type="hidden" name="cmd" value="_s-xclick">
-        <input type="hidden" name="custom" value="${thing.passthrough}" class="passthrough">
-        %if thing.quantity:
-          <input type="hidden" name="quantity" value="${thing.quantity}">
-        %endif
-        <input type="hidden" name="hosted_button_id" value="${thing.paypal_buttonid}">
-        <button type="submit" class="btn gold-button">${_("PayPal")}</button>
-      </form>
+      %if thing.paypal_buttonid:
+        ${self.paypal_button()}
+      %endif
+
+      %if thing.coinbase_button_id:
+        ${self.coinbase_button()}
+      %endif
+
+      %if thing.stripe_key:
+        ${self.stripe_button()}
+      %endif
+
+      %if thing.stripe_key and not thing.clone_template:
+        ${self.stripe_form()}
+      %endif
 
       <div class="throbber"></div>
 
-    %if not thing.google_id:
-      <div class="note">${_("Note: Google Checkout does not support ongoing subscriptions at this time.")}</div>
+      %if not thing.google_id:
+        <div class="note">${_("Note: Google Checkout does not support ongoing subscriptions at this time.")}</div>
+      %endif
     %endif
-  %endif
     </div>
   </div>
 </div>
+
+<%def name="creddits_button()">
+  <form id="giftgold" action="/api/spendcreddits" method="post"
+        class="content"
+        onsubmit="return post_form(this, 'spendcreddits');">
+    <input type="hidden" name="months" value="${thing.months}">
+    <input type="hidden" name="passthrough" value="${thing.passthrough}" class="passthrough">
+    <button class="btn gold-button">${_("give")}</button>
+    <span class="status"></span>
+    <div class="throbber"></div>
+  </form>
+</%def>
+
+<%def name="google_button()">
+  <form action="https://checkout.google.com/api/checkout/v2/checkoutForm/Merchant/${thing.google_id}"
+        id="BB_BuyButtonForm" method="post" name="BB_BuyButtonForm"
+        class="gold-checkout google-checkout"
+        data-vendor="google-checkout"
+        target="${'_blank' if thing.clone_template else '_top'}">
+    <input name="item_name_1" type="hidden" value="creddits">
+    <input name="item_description_1" type="hidden"
+           %if thing.months != thing.quantity:
+             value="${thing.quantity} year(s) of reddit gold"
+           %else:
+             value="${thing.quantity} month(s) of reddit gold"
+           %endif
+           >
+    <input name="item_quantity_1" type="hidden"
+           value="${thing.quantity}">
+    <input name="item_price_1" type="hidden"
+           value="${thing.unit_price.decimal}">
+    <input type="hidden"
+           name="shopping-cart.items.item-1.merchant-private-item-data"
+           value="${thing.passthrough}" class="passthrough">
+    <input name="item_currency_1" type="hidden" value="USD">
+    <input name="_charset_" type="hidden" value="utf-8">
+    <input type="hidden" name="analyticsdata" value="">
+    <button class="btn gold-button">${_("Google Checkout")}</button>
+  </form>
+</%def>
+
+<%def name="paypal_button()">
+  <form action="https://www.paypal.com/cgi-bin/webscr" method="post"
+        class="gold-checkout"
+        data-vendor="paypal" target="${'_blank' if thing.clone_template else '_top'}">
+    <input type="hidden" name="cmd" value="_s-xclick">
+    <input type="hidden" name="custom" value="${thing.passthrough}" class="passthrough">
+    %if thing.quantity:
+      <input type="hidden" name="quantity" value="${thing.quantity}">
+    %endif
+    <input type="hidden" name="hosted_button_id" value="${thing.paypal_buttonid}">
+    <button type="submit" class="btn gold-button">${_("PayPal")}</button>
+  </form>
+</%def>
+
+<%def name="stripe_button()">
+  <button class="btn stripe-gold gold-button">${_('Credit Card')}</button>
+</%def>
+
+<%def name="stripe_form(display=False)">
+  <script type="text/javascript" src="https://js.stripe.com/v1/"></script>
+
+  <form action="/api/stripecharge/gold" method="POST"
+        id="stripe-payment"
+        class="gold-checkout"
+        data-vendor="stripe"
+        ${not display and "style='display:none'" or ''}>
+    <hr>
+    <div class="stripe-note">
+      <a class="icon" href="https://stripe.com/help/security">powered by stripe</a>
+      <div>${_('Stripe is PCI compliant and your credit card information is sent directly to them.')}</div>
+    </div>
+    <table class="credit-card-input">
+      <tr>
+        <th><label>${_('name')}</label></th>
+        <td><input type="text" autocomplete="off" class="card-name"></td>
+      </tr>
+      <tr>
+        <th><label>${_('card number')}</label></th>
+        <td><input type="text" autocomplete="off" class="card-number"></td>
+      </tr>
+      <tr>
+        <th><label>${_('cvc')}</label></th>
+        <td><input type="text" autocomplete="off" class="card-cvc"></td>
+      </tr>
+      <tr>
+        <th><label>${_('expiration date')}</label></th>
+        <td>
+          <% 
+             import datetime
+             months = ['%02d' % m for m in xrange(1, 13)]
+             years = ['%04d' % y for y in xrange(datetime.datetime.now().year,
+                                                 datetime.datetime.now().year + 25)]
+           %>
+          <select class="card-expiry-month" title=${_('month')}>
+            %for m in months:
+              <option value="${m}">${m}</option>
+            %endfor
+          </select>
+          <select class="card-expiry-year" title=${_('year')}>
+            %for y in years:
+              <option value="${y}">${y}</option>
+            %endfor
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <th><label>${_('address line 1')}</label></th>
+        <td><input type="text" class="card-address_line1"></td>
+      </tr>
+      <tr>
+        <th><label>${_('address line 2')}</label></th>
+        <td><input type="text" class="card-address_line2"></td>
+      </tr>
+      <tr>
+        <th><label>${_('city')}</label></th>
+        <td><input type="text" class="card-address_city"></td>
+      </tr>
+      <tr>
+        <th><label>${_('state/province')}</label></th>
+        <td><input type="text" class="card-address_state"></td>
+      </tr>
+      <tr>
+        <th><label>${_('country')}</label></th>
+        <td>
+          <select class="card-address_country" title=${_('country')}>
+            <option value="US">United States</option>
+            <option value="Canada">Canada</option>
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <th><label>${_('zip')}</label></th>
+        <td><input type="text" class="card-address_zip"></td>
+      </tr>
+    </table>
+    <input type="hidden" name="stripePublicKey" value="${thing.stripe_key}">
+    <input type="hidden" name="stripeToken" value="">
+    <input type="hidden" name="pennies" value="${thing.price.pennies}">
+    <input type="hidden" name="months" value="${thing.months}">
+    <input type="hidden" name="passthrough" value="${thing.passthrough}">
+    <button class="btn gold-button stripe-submit">${_('Submit')}</button>
+    <span class="status"></span>
+  </form>
+</%def>
+
+<%def name="coinbase_button()">
+  <button class="btn coinbase-gold gold-button gold-checkout"
+          data-vendor="coinbase"
+          %if not thing.clone_template:
+            onclick="window.open('https://coinbase.com/checkouts/${thing.coinbase_button_id}?c=${thing.passthrough}')"
+          %endif
+          >${_('Bitcoin')}</button>
+  <input type="hidden" name="cbbaseurl" value="https://coinbase.com/checkouts/${thing.coinbase_button_id}">
+</%def>
 
 % if not thing.clone_template:
 <script src="//checkout.google.com/files/digital/ga_post.js"

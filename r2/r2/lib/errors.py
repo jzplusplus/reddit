@@ -20,11 +20,12 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
-from webob.exc import HTTPBadRequest, HTTPForbidden, HTTPError
+from webob.exc import HTTPBadRequest, HTTPForbidden, status_map
 from r2.lib.utils import Storage, tup
 from pylons import request
 from pylons.i18n import _
 from copy import copy
+
 
 error_list = dict((
         ('USER_REQUIRED', _("please login to do that")),
@@ -117,37 +118,55 @@ error_list = dict((
         ('BID_LIVE', _('you cannot edit the bid of a live ad')),
         ('TOO_MANY_CAMPAIGNS', _('you have too many campaigns for that promotion')),
         ('BAD_JSONP_CALLBACK', _('that jsonp callback contains invalid characters')),
+        ('INVALID_PERMISSION_TYPE', _("permissions don't apply to that type of user")),
+        ('INVALID_PERMISSIONS', _('invalid permissions string')),
     ))
+
 errors = Storage([(e, e) for e in error_list.keys()])
 
-class Error(object):
 
-    def __init__(self, name, i18n_message, msg_params, field=None, code=None):
-        self.name = name
-        self.i18n_message = i18n_message
-        self.msg_params = msg_params
-        # list of fields in the original form that caused the error
-        self.fields = tup(field) if field else []
-        self.code = code
-        
+class RedditError(Exception):
+    name = None
+    fields = None
+    code = None
+
+    def __init__(self, name=None, msg_params=None, fields=None, code=None):
+        Exception.__init__(self)
+
+        if name is not None:
+            self.name = name
+
+        self.i18n_message = error_list.get(self.name)
+        self.msg_params = msg_params or {}
+
+        if fields is not None:
+            # list of fields in the original form that caused the error
+            self.fields = tup(fields)
+
+        if code is not None:
+            self.code = code
+
     @property
     def message(self):
         return _(self.i18n_message) % self.msg_params
 
     def __iter__(self):
-         #yield ('num', self.num)
         yield ('name', self.name)
         yield ('message', _(self.message))
 
     def __repr__(self):
-        return '<Error: %s>' % self.name
+        return '<RedditError: %s>' % self.name
+
+    def __str__(self):
+        return repr(self)
+
 
 class ErrorSet(object):
     def __init__(self):
         self.errors = {}
 
     def __contains__(self, pair):
-        """Expectes an (error_name, field_name) tuple and checks to
+        """Expects an (error_name, field_name) tuple and checks to
         see if it's in the errors list."""
         return self.errors.has_key(pair)
 
@@ -166,39 +185,59 @@ class ErrorSet(object):
 
     def __len__(self):
         return len(self.errors)
-        
-    def add(self, error_name, msg_params={}, field=None, code=None):
-        msg = error_list.get(error_name)
+
+    def add(self, error_name, msg_params=None, field=None, code=None):
         for field_name in tup(field):
-            e = Error(error_name, msg, msg_params, field=field_name, code=code)
-            self.errors[(error_name, field_name)] = e
+            e = RedditError(error_name, msg_params, fields=field_name,
+                            code=code)
+            self.add_error(e)
+
+    def add_error(self, error):
+        for field_name in tup(error.fields):
+            self.errors[(error.name, field_name)] = error
 
     def remove(self, pair):
-        """Expectes an (error_name, field_name) tuple and removes it
+        """Expects an (error_name, field_name) tuple and removes it
         from the errors list."""
         if self.errors.has_key(pair):
             del self.errors[pair]
 
-class WikiError(HTTPError):
-    def __init__(self, code, reason=None, **data):
-        self.code = code
-        data['reason'] = self.explanation = reason or 'UNKNOWN_ERROR'
-        self.error_data = data
-        HTTPError.__init__(self)
 
 class ForbiddenError(HTTPForbidden):
-    def __init__(self, error):
+    def __init__(self, error_name):
         HTTPForbidden.__init__(self)
-        self.explanation = error_list[error]
+        self.explanation = error_list[error_name]
+
 
 class BadRequestError(HTTPBadRequest):
-    def __init__(self, error):
+    def __init__(self, error_name):
         HTTPBadRequest.__init__(self)
         self.error_data = {
-            'reason': error,
-            'explanation': error_list[error],
+            'reason': error_name,
+            'explanation': error_list[error_name],
         }
 
-class UserRequiredException(Exception): pass
-class VerifiedUserRequiredException(Exception): pass
-class GoldRequiredException(Exception): pass
+
+def reddit_http_error(code=400, error_name='UNKNOWN_ERROR', **data):
+    exc = status_map[code]()
+
+    data['reason'] = exc.explanation = error_name
+    if error_name in error_list:
+        data['explanation'] = exc.explanation = error_list[error_name]
+
+    # omit 'fields' json attribute if it is empty
+    if 'fields' in data and not data['fields']:
+        del data['fields']
+
+    exc.error_data = data
+    return exc
+
+
+class UserRequiredException(RedditError):
+    name = errors.USER_REQUIRED
+    code = 403
+
+
+class VerifiedUserRequiredException(RedditError):
+    name = errors.VERIFIED_USER_REQUIRED
+    code = 403

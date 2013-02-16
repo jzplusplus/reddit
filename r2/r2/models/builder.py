@@ -49,10 +49,11 @@ EXTRA_FACTOR = 1.5
 MAX_RECURSION = 10
 
 class Builder(object):
-    def __init__(self, wrap=Wrapped, keep_fn=None, stale=True):
+    def __init__(self, wrap=Wrapped, keep_fn=None, stale=True, spam_listing=False):
         self.stale = stale
         self.wrap = wrap
         self.keep_fn = keep_fn
+        self.spam_listing = spam_listing
 
     def keep_item(self, item):
         if self.keep_fn:
@@ -83,11 +84,17 @@ class Builder(object):
 
         subreddits = Subreddit.load_subreddits(items, stale=self.stale)
 
-        if not user:
-            can_ban_set = set()
-        else:
-            can_ban_set = set(id for (id,sr) in subreddits.iteritems()
-                              if sr.can_ban(user))
+        can_ban_set = set()
+        can_flair_set = set()
+        can_own_flair_set = set()
+        if user:
+            for sr_id, sr in subreddits.iteritems():
+                if sr.can_ban(user):
+                    can_ban_set.add(sr_id)
+                if sr.is_moderator_with_perms(user, 'flair'):
+                    can_flair_set.add(sr_id)
+                if sr.link_flair_self_assign_enabled:
+                    can_own_flair_set.add(sr_id)
 
         #get likes/dislikes
         try:
@@ -221,7 +228,8 @@ class Builder(object):
             w.show_reports = False
             w.show_spam    = False
             w.can_ban      = False
-            w.use_big_modbuttons = False
+            w.can_flair    = False
+            w.use_big_modbuttons = self.spam_listing
 
             if (c.user_is_admin
                 or (user
@@ -249,9 +257,17 @@ class Builder(object):
                         w._spam = False
                         w.use_big_modbuttons = False
 
-                elif getattr(item, 'reported', 0) > 0:
+                elif (getattr(item, 'reported', 0) > 0
+                      and (not getattr(item, 'ignore_reports', False) or c.user_is_admin)):
                     w.show_reports = True
                     w.use_big_modbuttons = True
+
+            if (c.user_is_admin
+                or (user and hasattr(item, 'sr_id')
+                    and (item.sr_id in can_flair_set
+                         or (w.author and w.author._id == user._id
+                             and item.sr_id in can_own_flair_set)))):
+                w.can_flair = True
 
         # recache the user object: it may be None if user is not logged in,
         # whereas now we are happy to have the UnloggedUser object
@@ -280,8 +296,9 @@ class Builder(object):
             return True
 
 class QueryBuilder(Builder):
-    def __init__(self, query, wrap=Wrapped, keep_fn=None, skip=False, **kw):
-        Builder.__init__(self, wrap=wrap, keep_fn=keep_fn)
+    def __init__(self, query, wrap=Wrapped, keep_fn=None, skip=False,
+                 spam_listing=False, **kw):
+        Builder.__init__(self, wrap=wrap, keep_fn=keep_fn, spam_listing=spam_listing)
         self.query = query
         self.skip = skip
         self.num = kw.get('num')
@@ -629,6 +646,7 @@ class TopCommentBuilder(CommentBuilder):
     def get_items(self, num = 10):
         final = CommentBuilder.get_items(self, num = num)
         return [ cm for cm in final if not cm.deleted ]
+
 class SrMessageBuilder(MessageBuilder):
     def __init__(self, sr, **kw):
         self.sr = sr

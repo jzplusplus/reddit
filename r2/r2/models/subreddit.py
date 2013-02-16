@@ -23,6 +23,7 @@
 from __future__ import with_statement
 
 import base64
+import collections
 import datetime
 import hashlib
 
@@ -36,6 +37,7 @@ from r2.lib.db.userrel import UserRel
 from r2.lib.db.operators import lower, or_, and_, desc
 from r2.lib.errors import UserRequiredException
 from r2.lib.memoize import memoize
+from r2.lib.permissions import ModeratorPermissionSet
 from r2.lib.utils import tup, interleave_lists, last_modified_multi, flatten
 from r2.lib.utils import timeago, summarize_markdown
 from r2.lib.cache import sgm
@@ -219,6 +221,16 @@ class Subreddit(Thing, Printable):
     def moderators(self):
         return self.moderator_ids()
 
+    def moderators_with_perms(self):
+        return collections.OrderedDict(
+            (r._thing2_id, r.get_permissions())
+            for r in self.each_moderator())
+
+    def moderator_invites_with_perms(self):
+        return collections.OrderedDict(
+            (r._thing2_id, r.get_permissions())
+            for r in self.each_moderator_invite())
+
     @property
     def stylesheet_is_static(self):
         """Is the subreddit using the newer static file based stylesheets?"""
@@ -343,19 +355,20 @@ class Subreddit(Thing, Printable):
         else:
             return False
 
-    def can_ban(self,user):
+    def can_ban(self, user):
         return (user
                 and (c.user_is_admin
-                     or self.is_moderator(user)))
+                     or self.is_moderator_with_perms(user, 'posts')))
 
     def can_distinguish(self,user):
         return (user
                 and (c.user_is_admin
-                     or self.is_moderator(user)))
+                     or self.is_moderator_with_perms(user, 'posts')))
 
     def can_change_stylesheet(self, user):
         if c.user_is_loggedin:
-            return c.user_is_admin or self.is_moderator(user)
+            return (
+                c.user_is_admin or self.is_moderator_with_perms(user, 'config'))
         else:
             return False
     
@@ -444,13 +457,13 @@ class Subreddit(Thing, Printable):
                     self.is_moderator_invite(user))
 
     def can_demod(self, bully, victim):
-        # This works because the is_*() functions return the relation
-        # when True. So we can compare the dates on the relations.
-        bully_rel = self.is_moderator(bully)
-        victim_rel = self.is_moderator(victim)
-        if bully_rel is None or victim_rel is None:
-            return False
-        return bully_rel._date <= victim_rel._date
+        bully_rel = self.get_moderator(bully)
+        victim_rel = self.get_moderator(victim)
+        return (
+            bully_rel is not None
+            and victim_rel is not None
+            and bully_rel.is_superuser()  # limited mods can't demod
+            and bully_rel._date <= victim_rel._date)
 
     @classmethod
     def load_subreddits(cls, links, return_dict = True, stale=False):
@@ -480,19 +493,19 @@ class Subreddit(Thing, Printable):
 
     def get_spam(self):
         from r2.lib.db import queries
-        return queries.get_spam(self)
+        return queries.get_spam(self, user=c.user)
 
     def get_reported(self):
         from r2.lib.db import queries
-        return queries.get_reported(self)
+        return queries.get_reported(self, user=c.user)
 
     def get_modqueue(self):
         from r2.lib.db import queries
-        return queries.get_modqueue(self)
+        return queries.get_modqueue(self, user=c.user)
 
     def get_unmoderated(self):
         from r2.lib.db import queries
-        return queries.get_unmoderated(self)
+        return queries.get_unmoderated(self, user=c.user)
 
     def get_all_comments(self):
         from r2.lib.db import queries
@@ -824,6 +837,32 @@ class Subreddit(Thing, Printable):
         # is really slow
         return [rel._thing2_id for rel in list(merged)]
 
+    def is_moderator_with_perms(self, user, *perms):
+        rel = self.is_moderator(user)
+        if rel:
+            return all(rel.has_permission(perm) for perm in perms)
+
+    def is_limited_moderator(self, user):
+        rel = self.is_moderator(user)
+        return bool(rel and not rel.is_superuser())
+
+    def is_unlimited_moderator(self, user):
+        rel = self.is_moderator(user)
+        return bool(rel and rel.is_superuser())
+
+    def update_moderator_permissions(self, user, **kwargs):
+        """Grants or denies permissions to this moderator.
+
+        Does nothing if the given user is not a moderator. Args are named
+        parameters with bool or None values (use None to all back to the default
+        for a permission).
+        """
+        rel = self.get_moderator(user)
+        if rel:
+            rel.update_permissions(**kwargs)
+            rel._commit()
+
+
 class FakeSubreddit(Subreddit):
     over_18 = False
     _nodb = True
@@ -841,7 +880,8 @@ class FakeSubreddit(Subreddit):
         return False
 
     def is_moderator(self, user):
-        return c.user_is_loggedin and c.user_is_admin
+        if c.user_is_loggedin and c.user_is_admin:
+            return FakeSRMember(ModeratorPermissionSet)
 
     def can_view(self, user):
         return True
@@ -1139,7 +1179,7 @@ class MultiReddit(_DefaultSR):
         if None in mod_rels.values():
             return False
         else:
-            return True
+            return FakeSRMember(ModeratorPermissionSet)
 
     @property
     def path(self):
@@ -1203,7 +1243,7 @@ class ModSR(ModContribSR):
     real_path = "mod"
 
     def is_moderator(self, user):
-        return True
+        return FakeSRMember(ModeratorPermissionSet)
 
 class ContribSR(ModContribSR):
     name  = "contrib"
@@ -1260,16 +1300,76 @@ Subreddit._specials.update(dict(friends = Friends,
                                 contrib = Contrib,
                                 all = All))
 
-class SRMember(Relation(Subreddit, Account)): pass
+class SRMember(Relation(Subreddit, Account)):
+    _defaults = dict(encoded_permissions=None)
+    _permission_class = None
+
+    def has_permission(self, perm):
+        """Returns whether this member has explicitly been granted a permission.
+        """
+        return self.get_permissions().get(perm, False)
+
+    def get_permissions(self):
+        """Returns permission set for this member (or None if N/A)."""
+        if not self._permission_class:
+            raise NotImplementedError
+        return self._permission_class.loads(self.encoded_permissions)
+
+    def update_permissions(self, **kwargs):
+        """Grants or denies permissions to this member.
+
+        Args are named parameters with bool or None values (use None to disable
+        granting or denying the permission). After calling this method,
+        the relation will be _dirty until _commit is called.
+        """
+        if not self._permission_class:
+            raise NotImplementedError
+        perm_set = self._permission_class.loads(self.encoded_permissions)
+        if perm_set is None:
+            perm_set = self._permission_class()
+        for k, v in kwargs.iteritems():
+            if v is None:
+                if k in perm_set:
+                    del perm_set[k]
+            else:
+                perm_set[k] = v
+        self.encoded_permissions = perm_set.dumps()
+
+    def set_permissions(self, perm_set):
+        """Assigns a permission set to this relation."""
+        self.encoded_permissions = perm_set.dumps()
+
+    def is_superuser(self):
+        return self.get_permissions().is_superuser()
+
+
+class FakeSRMember:
+    """All-permission granting stub for SRMember, used by FakeSubreddits."""
+    def __init__(self, permission_class):
+        self.permission_class = permission_class
+
+    def has_permission(self, perm):
+        return True
+
+    def get_permissions(self):
+        return self.permission_class(all=True)
+
+    def is_superuser(self):
+        return True
+
+
 Subreddit.__bases__ += (
-    UserRel('moderator', SRMember),
-    UserRel('moderator_invite', SRMember),
+    UserRel('moderator', SRMember,
+            permission_class=ModeratorPermissionSet),
+    UserRel('moderator_invite', SRMember,
+            permission_class=ModeratorPermissionSet),
     UserRel('contributor', SRMember),
     UserRel('subscriber', SRMember, disable_ids_fn=True),
     UserRel('banned', SRMember),
     UserRel('wikibanned', SRMember),
     UserRel('wikicontributor', SRMember),
 )
+
 
 class SubredditPopularityByLanguage(tdb_cassandra.View):
     _use_db = True

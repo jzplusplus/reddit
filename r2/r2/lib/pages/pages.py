@@ -207,7 +207,7 @@ class Reddit(Templated):
                                recipient="",
                                giftmessage=None,
                                passthrough=None,
-                               comment=True,
+                               comment=None,
                                clone_template=True,
                               )
             self._content = PaneStack([ShareLink(), content, gold])
@@ -245,40 +245,50 @@ class Reddit(Templated):
     def sr_admin_menu(self):
         buttons = []
         is_single_subreddit = not isinstance(c.site, (ModSR, MultiReddit))
+        is_admin = c.user_is_loggedin and c.user_is_admin
+        is_moderator_with_perms = lambda *perms: (
+            is_admin or c.site.is_moderator_with_perms(c.user, *perms))
 
-        if is_single_subreddit:
+        if is_single_subreddit and is_moderator_with_perms('config'):
             buttons.append(NavButton(menu.community_settings,
                                      css_class="reddit-edit",
                                      dest="edit"))
 
-        buttons.append(NamedButton("modmail",
-                                   dest="message/inbox",
-                                   css_class="moderator-mail"))
+        if is_moderator_with_perms('mail'):
+            buttons.append(NamedButton("modmail",
+                                    dest="message/inbox",
+                                    css_class="moderator-mail"))
 
         if is_single_subreddit:
-            buttons.append(NamedButton("moderators",
-                                       css_class="reddit-moderators"))
+            if is_moderator_with_perms('access'):
+                buttons.append(NamedButton("moderators",
+                                           css_class="reddit-moderators"))
 
-            if c.site.type != "public":
-                buttons.append(NamedButton("contributors",
-                                           css_class="reddit-contributors"))
-            else:
-                buttons.append(NavButton(menu.contributors,
-                                         "contributors",
-                                         css_class="reddit-contributors"))
+                if c.site.type != "public":
+                    buttons.append(NamedButton("contributors",
+                                               css_class="reddit-contributors"))
+                else:
+                    buttons.append(NavButton(menu.contributors,
+                                             "contributors",
+                                             css_class="reddit-contributors"))
 
             buttons.append(NamedButton("traffic", css_class="reddit-traffic"))
 
-        buttons += [NamedButton("modqueue", css_class="reddit-modqueue"),
-                    NamedButton("reports", css_class="reddit-reported"),
-                    NamedButton("spam", css_class="reddit-spam")]
+        if is_moderator_with_perms('posts'):
+            buttons += [NamedButton("modqueue", css_class="reddit-modqueue"),
+                        NamedButton("reports", css_class="reddit-reported"),
+                        NamedButton("spam", css_class="reddit-spam")]
 
         if is_single_subreddit:
-            buttons += [NamedButton("banned", css_class="reddit-ban"),
-                        NamedButton("flair", css_class="reddit-flair")]
+            if is_moderator_with_perms('access'):
+                buttons.append(NamedButton("banned", css_class="reddit-ban"))
+            if is_moderator_with_perms('flair'):
+                buttons.append(NamedButton("flair", css_class="reddit-flair"))
 
-        buttons += [NamedButton("log", css_class="reddit-moderationlog"),
-                    NamedButton("unmoderated", css_class="reddit-unmoderated")]
+        buttons.append(NamedButton("log", css_class="reddit-moderationlog"))
+        if is_moderator_with_perms('posts'):
+            buttons.append(
+                NamedButton("unmoderated", css_class="reddit-unmoderated"))
 
         return SideContentBox(_('moderation tools'),
                               [NavMenu(buttons,
@@ -310,23 +320,44 @@ class Reddit(Templated):
             ps.append(SponsorshipBox())
 
         user_banned = c.user_is_loggedin and c.site.is_banned(c.user)
-        if self.submit_box and (c.user_is_loggedin or not g.read_only_mode) and not user_banned:
-            kwargs = {
-                "title": _("Submit a post"),
-                "css_class": "submit",
-                "show_cover": True
-            }
-            if not c.user_is_loggedin or c.site.can_submit(c.user) or isinstance(c.site, FakeSubreddit):
-                kwargs["link"] = "/submit"
-                kwargs["sr_path"] = isinstance(c.site, DefaultSR) or not isinstance(c.site, FakeSubreddit),
-                kwargs["subtitles"] = [strings.submit_box_text]
-            else:
-                kwargs["disabled"] = True
+
+        if (self.submit_box
+                and (c.user_is_loggedin or not g.read_only_mode)
+                and not user_banned):
+            if (not isinstance(c.site, FakeSubreddit)
+                    and c.site.type in ("archived", "restricted")
+                    and not (c.user_is_loggedin
+                             and c.site.can_submit(c.user))):
                 if c.site.type == "archived":
-                    kwargs["subtitles"] = [strings.submit_box_archived_text]
+                    subtitle = _('this subreddit is archived '
+                                 'and no longer accepting submissions.')
+                    ps.append(SideBox(title=_('Submissions disabled'),
+                                      css_class="submit",
+                                      disabled=True,
+                                      subtitles=[subtitle],
+                                      show_icon=False))
                 else:
-                    kwargs["subtitles"] = [strings.submit_box_restricted_text]
-            ps.append(SideBox(**kwargs))
+                    subtitle = _('submission in this subreddit '
+                                 'is restricted to approved submitters.')
+                    ps.append(SideBox(title=_('Submissions restricted'),
+                                      css_class="submit",
+                                      disabled=True,
+                                      subtitles=[subtitle],
+                                      show_icon=False))
+            else:
+                fake_sub = isinstance(c.site, FakeSubreddit)
+                if c.site.link_type != 'self':
+                    ps.append(SideBox(title=_("Submit a new link"),
+                                      css_class="submit submit-link",
+                                      link="/submit",
+                                      sr_path=not fake_sub,
+                                      show_cover=True))
+                if c.site.link_type != 'link':
+                    ps.append(SideBox(title=_("Submit a new text post"),
+                                      css_class="submit submit-text",
+                                      link="/submit?selftext=true",
+                                      sr_path=not fake_sub,
+                                      show_cover=True))
 
         no_ads_yet = True
         show_adbox = (c.user.pref_show_adbox or not c.user.gold) and not g.disable_ads
@@ -351,8 +382,12 @@ class Reddit(Templated):
             ps.append(SubredditInfoBar())
             moderator = c.user_is_loggedin and (c.user_is_admin or 
                                           c.site.is_moderator(c.user))
+            wiki_moderator = c.user_is_loggedin and (
+                c.user_is_admin
+                or c.site.is_moderator_with_perms(c.user, 'wiki'))
             if self.show_wiki_actions:
-                ps.append(self.wiki_actions_menu(moderator=moderator))
+                menu = self.wiki_actions_menu(moderator=wiki_moderator)
+                ps.append(menu)
             if moderator:
                 ps.append(self.sr_admin_menu())
             if show_adbox:
@@ -453,7 +488,8 @@ class Reddit(Templated):
 
             mod = False
             if c.user_is_loggedin:
-                mod = bool(c.user_is_admin or c.site.is_moderator(c.user))
+                mod = bool(c.user_is_admin
+                           or c.site.is_moderator_with_perms(c.user, 'wiki'))
             if c.site._should_wiki and (c.site.wikimode != 'disabled' or mod):
                 if not g.disable_wiki:
                     main_buttons.append(NavButton('wiki', 'wiki'))
@@ -548,9 +584,9 @@ class RedditFooter(CachedTemplate):
                 separator = ""),
 
             NavMenu([
-                    NamedButton("help", False, nocname=True),
-                    OffsiteButton(_("FAQ"), dest = "/help/faq", nocname=True),
-                    OffsiteButton(_("reddiquette"), nocname=True, dest = "/help/reddiquette"),
+                    NamedButton("wiki", False, nocname=True),
+                    OffsiteButton(_("FAQ"), dest = "/wiki/faq", nocname=True),
+                    OffsiteButton(_("reddiquette"), nocname=True, dest = "/wiki/reddiquette"),
                     NamedButton("rules", False, nocname=True),
                     NamedButton("feedback", False),
                 ],
@@ -570,7 +606,7 @@ class RedditFooter(CachedTemplate):
                 separator = ""),
 
             NavMenu([
-                    NamedButton("gold", False, nocname=True, dest = "/help/gold", css_class = "buygold"),
+                    NamedButton("gold", False, nocname=True, dest = "/gold/about", css_class = "buygold"),
                     NamedButton("store", False, nocname=True),
                     OffsiteButton(_("redditgifts"), "http://redditgifts.com"),
                     OffsiteButton(_("reddit.tv"), "http://reddit.tv"),
@@ -675,12 +711,13 @@ class SideBox(CachedTemplate):
     Generic sidebox used to generate the 'submit' and 'create a reddit' boxes.
     """
     def __init__(self, title, link=None, css_class='', subtitles = [],
-                 show_cover = False, nocname=False, sr_path = False, disabled=False):
+                 show_cover = False, nocname=False, sr_path = False,
+                 disabled=False, show_icon=True):
         CachedTemplate.__init__(self, link = link, target = '_top',
                            title = title, css_class = css_class,
                            sr_path = sr_path, subtitles = subtitles,
                            show_cover = show_cover, nocname=nocname,
-                           disabled=disabled)
+                           disabled=disabled, show_icon=show_icon)
 
 
 class PrefsPage(Reddit):
@@ -1428,7 +1465,7 @@ class ProfilePage(Reddit):
         rb = Reddit.rightbox(self)
 
         tc = TrophyCase(self.user)
-        helplink = ( "/help/awards", _("what's this?") )
+        helplink = ( "/wiki/awards", _("what's this?") )
         scb = SideContentBox(title=_("trophy case"),
                  helplink=helplink, content=[tc],
                  extra_class="trophy-area")
@@ -1697,16 +1734,16 @@ class SubscriptionBox(Templated):
             if not c.user.gold:
                 self.goldlink = "/gold"
                 self.goldmsg = _("raise it to %s") % Subreddit.gold_limit
-                self.prelink = ["/help/faq#HowmanyredditscanIsubscribeto",
+                self.prelink = ["/wiki/faq#wiki_how_many_reddits_can_i_subscribe_to.3F",
                                 _("%s visible") % Subreddit.sr_limit]
             else:
-                self.goldlink = "/help/gold#WhatdoIgetforjoining"
+                self.goldlink = "/gold/about"
                 extra = min(len(srs) - Subreddit.sr_limit,
                             Subreddit.gold_limit - Subreddit.sr_limit)
                 visible = min(len(srs), Subreddit.gold_limit)
                 bonus = {"bonus": extra}
                 self.goldmsg = _("%(bonus)s bonus reddits") % bonus
-                self.prelink = ["/help/faq#HowmanyredditscanIsubscribeto",
+                self.prelink = ["/wiki/faq#wiki_how_many_reddits_can_i_subscribe_to.3F",
                                 _("%s visible") % visible]
 
         Templated.__init__(self, srs=srs, goldlink=self.goldlink,
@@ -1812,9 +1849,18 @@ class GoldPayment(Templated):
         pay_from_creddits = False
 
         if period == "monthly" or 1 <= months < 12:
-            price = g.gold_month_price.decimal
+            unit_price = g.gold_month_price
+            if period == 'monthly':
+                price = unit_price
+            else:
+                price = unit_price * months
         else:
-            price = g.gold_year_price.decimal
+            unit_price = g.gold_year_price
+            if period == 'yearly':
+                price = unit_price
+            else:
+                years = months / 12
+                price = unit_price * years
 
         if c.user_is_admin:
             user_creddits = 50
@@ -1830,33 +1876,48 @@ class GoldPayment(Templated):
 
             quantity = None
             google_id = None
+            stripe_key = None
+            coinbase_button_id = None
+
         elif goldtype == "onetime":
             if months < 12:
                 paypal_buttonid = g.PAYPAL_BUTTONID_ONETIME_BYMONTH
                 quantity = months
+                coinbase_name = 'COINBASE_BUTTONID_ONETIME_%sMO' % quantity
+                coinbase_button_id = getattr(g, coinbase_name, None)
             else:
                 paypal_buttonid = g.PAYPAL_BUTTONID_ONETIME_BYYEAR
                 quantity = months / 12
                 months = quantity * 12
+                coinbase_name = 'COINBASE_BUTTONID_ONETIME_%sYR' % quantity
+                coinbase_button_id = getattr(g, coinbase_name, None)
 
             summary = strings.gold_summary_onetime % dict(user=c.user.name,
                                      amount=Score.somethings(months, "month"))
 
             google_id = g.GOOGLE_ID
+            stripe_key = g.STRIPE_PUBLIC_KEY
+
         else:
             if months < 12:
                 paypal_buttonid = g.PAYPAL_BUTTONID_CREDDITS_BYMONTH
                 quantity = months
+                coinbase_name = 'COINBASE_BUTTONID_ONETIME_%sMO' % quantity
+                coinbase_button_id = getattr(g, coinbase_name, None)
             else:
                 paypal_buttonid = g.PAYPAL_BUTTONID_CREDDITS_BYYEAR
                 quantity = months / 12
+                coinbase_name = 'COINBASE_BUTTONID_ONETIME_%sYR' % quantity
+                coinbase_button_id = getattr(g, coinbase_name, None)
 
             if goldtype == "creddits":
                 summary = strings.gold_summary_creddits % dict(
                           amount=Score.somethings(months, "month"))
             elif goldtype == "gift":
-                if comment:
+                if clone_template:
                     format = strings.gold_summary_comment_gift
+                elif comment:
+                    format = strings.gold_summary_comment_page
                 elif signed:
                     format = strings.gold_summary_signed_gift
                 else:
@@ -1881,15 +1942,25 @@ class GoldPayment(Templated):
                 raise ValueError("wtf is %r" % goldtype)
 
             google_id = g.GOOGLE_ID
+            stripe_key = g.STRIPE_PUBLIC_KEY
 
         Templated.__init__(self, goldtype=goldtype, period=period,
-                           months=months, quantity=quantity, price=price,
+                           months=months, quantity=quantity,
+                           unit_price=unit_price, price=price,
                            summary=summary, giftmessage=giftmessage,
                            pay_from_creddits=pay_from_creddits,
                            passthrough=passthrough,
                            google_id=google_id,
                            comment=comment, clone_template=clone_template,
-                           paypal_buttonid=paypal_buttonid)
+                           paypal_buttonid=paypal_buttonid,
+                           stripe_key=stripe_key,
+                           coinbase_button_id=coinbase_button_id)
+
+
+class CreditGild(Templated):
+    """Page for credit card payments for comment gilding."""
+    pass
+
 
 class GiftGold(Templated):
     """The page to gift reddit gold trophies"""
@@ -2455,7 +2526,8 @@ class WrappedUser(CachedTemplate):
 
         if include_flair_selector:
             if (not getattr(c.site, 'flair_self_assign_enabled', True)
-                and not (c.user_is_admin or c.site.is_moderator(c.user))):
+                and not (c.user_is_admin
+                         or c.site.is_moderator_with_perms(c.user, 'flair'))):
                 include_flair_selector = False
 
         target = None
@@ -2680,7 +2752,8 @@ class FlairPrefs(CachedTemplate):
 class FlairSelectorLinkSample(CachedTemplate):
     def __init__(self, link, site, flair_template):
         flair_position = getattr(site, 'link_flair_position', 'right')
-        admin = bool(c.user_is_admin or site.is_moderator(c.user))
+        admin = bool(c.user_is_admin
+                     or site.is_moderator_with_perms(c.user, 'flair'))
         CachedTemplate.__init__(
             self,
             title=link.title,
@@ -2698,7 +2771,8 @@ class FlairSelector(CachedTemplate):
             user = c.user
         if site is None:
             site = c.site
-        admin = bool(c.user_is_admin or site.is_moderator(c.user))
+        admin = bool(c.user_is_admin
+                     or site.is_moderator_with_perms(c.user, 'flair'))
 
         if link:
             flair_type = LINK_FLAIR
@@ -2907,6 +2981,16 @@ class ModList(UserList):
     invite_form_title = _('invite moderator')
     remove_self_title = _('you are a moderator of this subreddit. %(action)s')
 
+    def __init__(self, editable=True):
+        super(ModList, self).__init__(editable=editable)
+        self.perms_by_type = {
+            self.type: c.site.moderators_with_perms(),
+            self.invite_type: c.site.moderator_invites_with_perms(),
+        }
+        self.cells = ('user', 'permissions', 'permissionsctl', 'sendmessage')
+        if editable:
+            self.cells += ('remove',)
+
     @property
     def table_title(self):
         return _("moderators of /r/%(reddit)s") % {"reddit": c.site.name}
@@ -2929,24 +3013,50 @@ class ModList(UserList):
     def has_invite(self):
         return c.user_is_loggedin and c.site.is_moderator_invite(c.user)
 
-    def moderator_editable(self, user):
+    def moderator_editable(self, user, row_type):
         if not c.user_is_loggedin:
             return False
         elif c.user_is_admin:
             return True
-        else:
+        elif row_type == self.type:
             return c.site.can_demod(c.user, user)
+        elif row_type == self.invite_type:
+            return c.site.is_unlimited_moderator(c.user)
+        else:
+            return False
+
+    def user_row(self, row_type, user, editable=True):
+        perms = ModeratorPermissions(
+            user, row_type, self.perms_by_type[row_type].get(user._id),
+            editable=editable and self.moderator_editable(user, row_type))
+        return UserTableItem(user, row_type, self.cells, self.container_name,
+                             editable, self.remove_action, rel=perms)
 
     @property
     def user_rows(self):
-        return self._user_rows(self.type, self.user_ids(), self.moderator_editable)
+        return self._user_rows(
+            self.type, self.user_ids(),
+            lambda u: self.moderator_editable(u, self.type))
 
     @property
     def invited_user_rows(self):
-        return self._user_rows(self.invite_type, c.site.moderator_invite_ids())
+        return self._user_rows(
+            self.invite_type, self.invited_user_ids(),
+            lambda u: self.moderator_editable(u, self.invite_type))
+
+    def _sort_user_ids(self, row_type):
+        for user_id, perms in self.perms_by_type[row_type].iteritems():
+            if perms is None:
+                yield user_id
+        for user_id, perms in self.perms_by_type[row_type].iteritems():
+            if perms is not None:
+                yield user_id
 
     def user_ids(self):
-        return c.site.moderators
+        return list(self._sort_user_ids(self.type))
+
+    def invited_user_ids(self):
+        return list(self._sort_user_ids(self.invite_type))
 
 class BannedList(UserList):
     """List of users banned from a given reddit"""
@@ -3804,7 +3914,6 @@ class GoldInfoPage(BoringPage):
         }
         BoringPage.__init__(self, *args, **kwargs)
 
-
 class Goldvertisement(Templated):
     def __init__(self):
         Templated.__init__(self)
@@ -3822,3 +3931,11 @@ class LinkCommentsSettings(Templated):
         self.can_edit = (c.user_is_loggedin
                            and (c.user_is_admin or
                                 link.subreddit_slow.is_moderator(c.user)))
+
+class ModeratorPermissions(Templated):
+    def __init__(self, user, permissions_type, permissions,
+                 editable=False, embedded=False):
+        self.user = user
+        self.permissions = permissions
+        Templated.__init__(self, permissions_type=permissions_type,
+                           editable=editable, embedded=embedded)

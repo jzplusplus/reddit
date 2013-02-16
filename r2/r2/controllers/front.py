@@ -51,7 +51,7 @@ from oauth2 import OAuth2ResourceController, require_oauth2_scope
 from api_docs import api_doc, api_section
 from pylons import c, request, response
 from r2.models.token import EmailVerificationToken
-from r2.controllers.ipn import generate_blob
+from r2.controllers.ipn import generate_blob, validate_blob, GoldException
 
 from operator import attrgetter
 import string
@@ -553,7 +553,9 @@ class FrontController(RedditController, OAuth2ResourceController):
                               num = num, after = after,
                               keep_fn = keep_fn,
                               count = count, reverse = reverse,
-                              wrap = ListingController.builder_wrapper)
+                              wrap = ListingController.builder_wrapper,
+                              spam_listing = True,
+                             )
         listing = LinkListing(builder)
         pane = listing.listing()
 
@@ -593,9 +595,17 @@ class FrontController(RedditController, OAuth2ResourceController):
     def _edit_normal_reddit(self, location, num, after, reverse, count, created,
                             name, user):
         # moderator is either reddit's moderator or an admin
-        is_moderator = c.user_is_loggedin and c.site.is_moderator(c.user) or c.user_is_admin
+        moderator_rel = c.user_is_loggedin and c.site.get_moderator(c.user)
+        is_moderator = c.user_is_admin or moderator_rel
+        is_unlimited_moderator = c.user_is_admin or (
+            moderator_rel and moderator_rel.is_superuser())
+        is_moderator_with_perms = lambda *perms: (
+            c.user_is_admin
+            or moderator_rel and all(moderator_rel.has_permission(perm)
+                                     for perm in perms))
+
         extension_handling = False
-        if is_moderator and location == 'edit':
+        if is_moderator_with_perms('config') and location == 'edit':
             pane = PaneStack()
             if created == 'true':
                 pane.append(InfoBar(message = strings.sr_created))
@@ -603,20 +613,24 @@ class FrontController(RedditController, OAuth2ResourceController):
             c.site = Subreddit._byID(c.site._id, data=True, stale=False)
             pane.append(CreateSubreddit(site = c.site))
         elif location == 'moderators':
-            pane = ModList(editable = is_moderator)
-        elif is_moderator and location == 'banned':
-            pane = BannedList(editable = is_moderator)
-        elif is_moderator and location == 'wikibanned':
-            pane = WikiBannedList(editable = is_moderator)
-        elif is_moderator and location == 'wikicontributors':
-            pane = WikiMayContributeList(editable = is_moderator)
+            pane = ModList(editable=is_unlimited_moderator)
+        elif is_moderator_with_perms('access') and location == 'banned':
+            pane = BannedList(editable=is_moderator_with_perms('access'))
+        elif is_moderator_with_perms('wiki') and location == 'wikibanned':
+            pane = WikiBannedList(editable=is_moderator_with_perms('access'))
+        elif (is_moderator_with_perms('wiki')
+              and location == 'wikicontributors'):
+            pane = WikiMayContributeList(
+                editable=is_moderator_with_perms('wiki'))
         elif (location == 'contributors' and
               # On public reddits, only moderators can see the whitelist.
               # On private reddits, all contributors can see each other.
               (c.site.type != 'public' or
                (c.user_is_loggedin and
-                (c.site.is_moderator(c.user) or c.user_is_admin)))):
-                pane = ContributorList(editable = is_moderator)
+                (c.site.is_moderator_with_perms(c.user, 'access')
+                 or c.user_is_admin)))):
+                pane = ContributorList(
+                    editable=is_moderator_with_perms('access'))
         elif (location == 'stylesheet'
               and c.site.can_change_stylesheet(c.user)
               and not g.css_killswitch):
@@ -636,14 +650,14 @@ class FrontController(RedditController, OAuth2ResourceController):
                           c.site.stylesheet_contents)
             pane = SubredditStylesheetSource(stylesheet_contents=stylesheet)
         elif (location in ('reports', 'spam', 'modqueue', 'unmoderated')
-              and is_moderator):
+              and is_moderator_with_perms('posts')):
             c.allow_styles = True
             pane = self._make_spamlisting(location, num, after, reverse, count)
             if c.user.pref_private_feeds:
                 extension_handling = "private"
         elif (is_moderator or c.user_is_sponsor) and location == 'traffic':
             pane = trafficpages.SubredditTraffic()
-        elif is_moderator and location == 'flair':
+        elif is_moderator_with_perms('flair') and location == 'flair':
             c.allow_styles = True
             pane = FlairPane(num, after, reverse, name, user)
         elif c.user_is_sponsor and location == 'ads':
@@ -787,7 +801,7 @@ class FrontController(RedditController, OAuth2ResourceController):
                              simple=True).render()
         return res
 
-    search_help_page = "/help/search"
+    search_help_page = "/wiki/search"
     verify_langs_regex = re.compile(r"\A[a-z][a-z](,[a-z][a-z])*\Z")
     @base_listing
     @validate(query=VLength('q', max_length=512),
@@ -997,9 +1011,16 @@ class FrontController(RedditController, OAuth2ResourceController):
 
     @require_oauth2_scope("modtraffic")
     @validate(VTrafficViewer('article'),
-              article = VLink('article'))
-    def GET_traffic(self, article):
-        content = trafficpages.PromotedLinkTraffic(article)
+              article = VLink('article'),
+              before = VDate('before', format='%Y%m%d%H'),
+              after = VDate('after', format='%Y%m%d%H'))
+    def GET_traffic(self, article, before, after):
+        if before:
+            before = before.replace(tzinfo=None)
+        if after:
+            after = after.replace(tzinfo=None)
+
+        content = trafficpages.PromotedLinkTraffic(article, before, after)
         if c.render_style == 'csv':
             return content.as_csv()
 
@@ -1044,7 +1065,7 @@ class FrontController(RedditController, OAuth2ResourceController):
                           ).render()
     
     @validate(vendor=VOneOf("v", ("claimed-gold", "claimed-creddits",
-                                  "paypal", "google-checkout"),
+                                  "paypal", "google-checkout", "coinbase"),
                             default="claimed-gold"))
     def GET_goldthanks(self, vendor):
         vendor_url = None
@@ -1065,6 +1086,11 @@ class FrontController(RedditController, OAuth2ResourceController):
         elif vendor == "google-checkout":
             claim_msg = vendor_claim_msg
             vendor_url = "https://wallet.google.com/manage"
+        elif vendor == "coinbase":
+            claim_msg = _("thanks for buying reddit gold! your transaction is "
+                          "being processed. if you have any questions please "
+                          "email us at %(gold_email)s")
+            claim_msg = claim_msg % {'gold_email': g.goldthanks_email}
         else:
             abort(404)
         
@@ -1279,6 +1305,41 @@ class FormsController(RedditController):
     def GET_claim(self, secret):
         """The page to claim reddit gold trophies"""
         return BoringPage(_("thanks"), content=Thanks(secret)).render()
+
+    @validate(VUser(),
+              passthrough=nop('passthrough'))
+    def GET_creditgild(self, passthrough):
+        """Used only for setting up credit card payments for gilding."""
+        try:
+            payment_blob = validate_blob(passthrough)
+        except GoldException:
+            self.abort404()
+
+        if c.user != payment_blob['buyer']:
+            self.abort404()
+
+        if not payment_blob['goldtype'] == 'gift':
+            self.abort404()
+
+        recipient = payment_blob['recipient']
+        comment = payment_blob['comment']
+        summary = strings.gold_summary_comment_page
+        summary = summary % {'recipient': recipient.name}
+        months = 1
+        price = g.gold_month_price * months
+
+        content = CreditGild(
+            summary=summary,
+            price=price,
+            months=months,
+            stripe_key=g.STRIPE_PUBLIC_KEY,
+            passthrough=passthrough,
+            comment=comment,
+        )
+
+        return BoringPage(_("reddit gold"),
+                          show_sidebar=False,
+                          content=content).render()
 
     @validate(VUser(),
               goldtype = VOneOf("goldtype",

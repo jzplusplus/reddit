@@ -359,7 +359,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                               (c.user.name, filled_quota), "info")
 
                     verify_link = "/verify?reason=submit"
-                    reddiquette_link = "/help/reddiquette" 
+                    reddiquette_link = "/wiki/reddiquette" 
 
                     if c.user.email_verified:
                         msg = strings.verified_quota_msg % dict(reddiquette=reddiquette_link)
@@ -562,6 +562,11 @@ class ApiController(RedditController, OAuth2ResourceController):
         'wikicontributor',
     )
 
+    _sr_friend_types_with_permissions = (
+        'moderator',
+        'moderator_invite',
+    )
+
     @noresponse(VUser(),
                 VModhash(),
                 nuser = VExistingUname('name'),
@@ -588,8 +593,10 @@ class ApiController(RedditController, OAuth2ResourceController):
         # The user who made the request must be an admin or a moderator
         # for the privilege change to succeed.
         victim = iuser or nuser
+        perm = 'wiki' if type.startswith('wiki') else 'access'
         if (not c.user_is_admin
-            and (type in self._sr_friend_types and not container.is_moderator(c.user))):
+            and (type in self._sr_friend_types
+                 and not container.is_moderator_with_perms(c.user, perm))):
             abort(403, 'forbidden')
         if (type == 'moderator' and not
             (c.user_is_admin or container.can_demod(c.user, victim))):
@@ -625,16 +632,55 @@ class ApiController(RedditController, OAuth2ResourceController):
 	    if type == "friend" and c.user.gold:
 		c.user.friend_rels_cache(_update=True)
 
+    @validatedForm(VSrModerator(), VModhash(),
+                   target=VExistingUname('name'),
+                   type_and_permissions=VPermissions('type', 'permissions'))
+    @api_doc(api_section.users)
+    def POST_setpermissions(self, form, jquery, target, type_and_permissions):
+        if form.has_errors('name', errors.USER_DOESNT_EXIST, errors.NO_USER):
+            return
+        if form.has_errors('type', errors.INVALID_PERMISSION_TYPE):
+            return
+        if form.has_errors('permissions', errors.INVALID_PERMISSIONS):
+            return
+
+        type, permissions = type_and_permissions
+        update = None
+
+        if type in ("moderator", "moderator_invite"):
+            if not c.user_is_admin:
+                if type == "moderator" and not c.site.can_demod(c.user, target):
+                    abort(403, 'forbidden')
+                if (type == "moderator_invite"
+                    and not c.site.is_unlimited_moderator(c.user)):
+                    abort(403, 'forbidden')
+            if type == "moderator":
+                rel = c.site.get_moderator(target)
+            if type == "moderator_invite":
+                rel = c.site.get_moderator_invite(target)
+            rel.set_permissions(permissions)
+            rel._commit()
+            update = rel.encoded_permissions
+            ModAction.create(c.site, c.user, action='setpermissions',
+                             target=target, details='permission_' + type,
+                             description=update)
+
+        if update:
+            row = form.closest('tr')
+            editor = row.find('.permissions').data('PermissionEditor')
+            editor.onCommit(update)
+
     @validatedForm(VUser(),
                    VModhash(),
                    ip = ValidIP(),
                    friend = VExistingUname('name'),
                    container = nop('container'),
                    type = VOneOf('type', ('friend',) + _sr_friend_types),
+                   type_and_permissions = VPermissions('type', 'permissions'),
                    note = VLength('note', 300))
     @api_doc(api_section.users)
     def POST_friend(self, form, jquery, ip, friend,
-                    container, type, note):
+                    container, type, type_and_permissions, note):
         """
         Complement to POST_unfriend: handles friending as well as
         privilege changes on subreddits.
@@ -652,9 +698,10 @@ class ApiController(RedditController, OAuth2ResourceController):
 
         # The user who made the request must be an admin or a moderator
         # for the privilege change to succeed.
+        perm = 'wiki' if type.startswith('wiki') else 'access'
         if (not c.user_is_admin
                 and type in self._sr_friend_types
-                and (not container.is_moderator(c.user)
+                and (not container.is_moderator_with_perms(c.user, perm)
                      or c.user._spam)):
             if c.user._spam:
                 return
@@ -700,6 +747,16 @@ class ApiController(RedditController, OAuth2ResourceController):
 	    elif form.has_errors("name", errors.USER_DOESNT_EXIST, errors.NO_USER):
 		return
 
+            if type in self._sr_friend_types_with_permissions:
+                if form.has_errors('type', errors.INVALID_PERMISSION_TYPE):
+                    return
+                if form.has_errors('permissions', errors.INVALID_PERMISSIONS):
+                    return
+            else:
+                permissions = None
+
+
+
 	    if type == "moderator_invite" and cont.is_moderator(friend):
 		c.errors.add(errors.ALREADY_MODERATOR, field="name")
 		form.set_error(errors.ALREADY_MODERATOR, "name")
@@ -708,7 +765,7 @@ class ApiController(RedditController, OAuth2ResourceController):
 	    if type == "moderator":
 		cont.remove_moderator_invite(friend)
 
-	    new = fn(friend)
+            new = fn(friend, permissions=type_and_permissions[1])
 
 	    # Log this action
 	    if new and type in self._sr_friend_types:
@@ -728,7 +785,6 @@ class ApiController(RedditController, OAuth2ResourceController):
 		# the right one and update its data.
 		c.user.friend_rels_cache(_update=True)
 		c.user.add_friend_note(friend, note or '')
-
             if new:
 		notify_user_added(type, c.user, friend, cont)
 
@@ -758,13 +814,15 @@ class ApiController(RedditController, OAuth2ResourceController):
                    ip=ValidIP())
     @api_doc(api_section.subreddits)
     def POST_accept_moderator_invite(self, form, jquery, ip):
+        rel = c.site.get_moderator_invite(c.user)
         if not c.site.remove_moderator_invite(c.user):
             c.errors.add(errors.NO_INVITE_FOUND)
             form.set_error(errors.NO_INVITE_FOUND, None)
             return
 
+        permissions = rel.get_permissions()
         ModAction.create(c.site, c.user, "acceptmoderatorinvite")
-        c.site.add_moderator(c.user)
+        c.site.add_moderator(c.user, permissions=rel.get_permissions())
         notify_user_added("accept_moderator_invite", c.user, c.user, c.site)
         jquery.refresh()
 
@@ -1094,6 +1152,8 @@ class ApiController(RedditController, OAuth2ResourceController):
                 or (item._ups + item._downs > 2)):
                 item.editted = c.start_time
 
+            item.ignore_reports = False
+
             item._commit()
 
             changed(item)
@@ -1396,7 +1456,7 @@ class ApiController(RedditController, OAuth2ResourceController):
         # In order to avoid breaking functionality, this was done instead.
         prevstyle = request.post.get('prevstyle')
         if not report:
-            return self.abort(403,'forbidden')
+            return abort(403, 'forbidden')
         
         if report.errors:
             error_items = [ CssError(x).render(style='html')
@@ -1469,7 +1529,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                     cssfilter.rendered_comment(comments))
 
     @require_oauth2_scope("modconfig")
-    @validatedForm(VSrModerator(),
+    @validatedForm(VSrModerator(perms='config'),
                    VModhash(),
                    name = VCssName('img_name'))
     @api_doc(api_section.subreddits)
@@ -1488,7 +1548,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                          details='del_image', description=name)
 
     @require_oauth2_scope("modconfig")
-    @validatedForm(VSrModerator(),
+    @validatedForm(VSrModerator(perms='config'),
                    VModhash(),
                    sponsor = VInt("sponsor", min = 0, max = 1))
     @api_doc(api_section.subreddits)
@@ -1530,7 +1590,7 @@ class ApiController(RedditController, OAuth2ResourceController):
         return "nothing to see here."
 
     @require_oauth2_scope("modconfig")
-    @validate(VSrModerator(),
+    @validate(VSrModerator(perms='config'),
               VModhash(),
               file = VLength('file', max_length=1024*500),
               name = VCssName("name"),
@@ -1776,7 +1836,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                 changed(sr)
 
         #editting an existing reddit
-        elif sr.is_moderator(c.user) or c.user_is_admin:
+        elif sr.is_moderator_with_perms(c.user, 'config') or c.user_is_admin:
 
             if c.user_is_admin:
                 sr.sponsorship_text = sponsor_text or ""
@@ -1897,6 +1957,38 @@ class ApiController(RedditController, OAuth2ResourceController):
             sr = thing.subreddit_slow
             action = 'approve' + thing.__class__.__name__.lower()
             ModAction.create(sr, c.user, action, **kw)
+
+    @require_oauth2_scope("modposts")
+    @noresponse(VUser(), VModhash(),
+                VSrCanBan('id'),
+                thing=VByName('id'))
+    @api_doc(api_section.moderation)
+    def POST_ignore_reports(self, thing):
+        if not thing: return
+        if thing._deleted: return
+        if thing.ignore_reports: return
+
+        thing.ignore_reports = True
+        thing._commit()
+
+        sr = thing.subreddit_slow
+        ModAction.create(sr, c.user, 'ignorereports', target=thing)
+
+    @require_oauth2_scope("modposts")
+    @noresponse(VUser(), VModhash(),
+                VSrCanBan('id'),
+                thing=VByName('id'))
+    @api_doc(api_section.moderation)
+    def POST_unignore_reports(self, thing):
+        if not thing: return
+        if thing._deleted: return
+        if not thing.ignore_reports: return
+
+        thing.ignore_reports = False
+        thing._commit()
+
+        sr = thing.subreddit_slow
+        ModAction.create(sr, c.user, 'unignorereports', target=thing)
 
     @require_oauth2_scope("modposts")
     @validatedForm(VUser(), VModhash(),
@@ -2522,7 +2614,7 @@ class ApiController(RedditController, OAuth2ResourceController):
         form.set_html(".status", _('saved'))
 
     @require_oauth2_scope("modflair")
-    @validatedForm(VFlairManager(),
+    @validatedForm(VSrModerator(perms='flair'),
                    VModhash(),
                    user = VFlairAccount("name"),
                    link = VFlairLink('link'),
@@ -2537,7 +2629,8 @@ class ApiController(RedditController, OAuth2ResourceController):
             else:
                 site = Subreddit._byID(link.sr_id, data=True)
                 # make sure c.user has permission to set flair on this link
-                if not c.user_is_admin and not site.is_moderator(c.user):
+                if not (c.user_is_admin 
+                        or site.is_moderator_with_perms(c.user, 'flair')):
                     abort(403, 'forbidden')
         else:
             flair_type = USER_FLAIR
@@ -2596,7 +2689,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                 form.set_html('.status', _('saved'))
 
     @require_oauth2_scope("modflair")
-    @validatedForm(VFlairManager(),
+    @validatedForm(VSrModerator(perms='flair'),
                    VModhash(),
                    user = VFlairAccount("name"))
     @api_doc(api_section.flair)
@@ -2618,7 +2711,7 @@ class ApiController(RedditController, OAuth2ResourceController):
         jquery('.tagline .id-%s' % user._fullname).parent().html(unflair)
 
     @require_oauth2_scope("modflair")
-    @validate(VFlairManager(),
+    @validate(VSrModerator(perms='flair'),
               VModhash(),
               flair_csv = nop('flair_csv'))
     @api_doc(api_section.flair)
@@ -2696,7 +2789,7 @@ class ApiController(RedditController, OAuth2ResourceController):
 
     @require_oauth2_scope("modflair")
     @validatedForm(
-        VFlairManager(),
+        VSrModerator(perms='flair'),
         VModhash(),
         flair_enabled = VBoolean("flair_enabled"),
         flair_position = VOneOf("flair_position", ("left", "right")),
@@ -2743,7 +2836,7 @@ class ApiController(RedditController, OAuth2ResourceController):
         return BoringPage(_("API"), content = flair).render()
 
     @require_oauth2_scope("modflair")
-    @validatedForm(VFlairManager(),
+    @validatedForm(VSrModerator(perms='flair'),
                    VModhash(),
                    flair_template = VFlairTemplateByID('flair_template_id'),
                    text = VFlairText('text'),
@@ -2813,7 +2906,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                              details='flair_template')
 
     @require_oauth2_scope("modflair")
-    @validatedForm(VFlairManager(),
+    @validatedForm(VSrModerator(perms='flair'),
                    VModhash(),
                    flair_template = VFlairTemplateByID('flair_template_id'))
     @api_doc(api_section.flair)
@@ -2825,7 +2918,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                              details='flair_delete_template')
 
     @require_oauth2_scope("modflair")
-    @validatedForm(VFlairManager(), VModhash(),
+    @validatedForm(VSrModerator(perms='flair'), VModhash(),
                    flair_type = VOneOf('flair_type', (USER_FLAIR, LINK_FLAIR),
                                        default=USER_FLAIR))
     @api_doc(api_section.flair)
@@ -2845,7 +2938,8 @@ class ApiController(RedditController, OAuth2ResourceController):
             else:
                 site = Subreddit._byID(link.sr_id, data=True)
             return FlairSelector(link=link, site=site).render()
-        if user and not (c.user_is_admin or c.site.is_moderator(c.user)):
+        if user and not (c.user_is_admin
+                         or c.site.is_moderator_with_perms(c.user, 'flair')):
             # ignore user parameter if c.user is not mod/admin
             user = None
         return FlairSelector(user=user).render()
@@ -2883,7 +2977,8 @@ class ApiController(RedditController, OAuth2ResourceController):
             flair_template = None
             text = None
 
-        if not site.is_moderator(c.user) and not c.user_is_admin:
+        if not (c.user_is_admin
+                or site.is_moderator_with_perms(c.user, 'flair')):
             if not self_assign_enabled:
                 # TODO: serve error to client
                 g.log.debug('flair self-assignment not permitted')
@@ -2909,7 +3004,8 @@ class ApiController(RedditController, OAuth2ResourceController):
             setattr(user, 'flair_%s_css_class' % site._id, css_class)
             user._commit()
 
-            if ((site.is_moderator(c.user) or c.user_is_admin)
+            if ((c.user_is_admin
+                 or site.is_moderator_with_perms(c.user, 'flair'))
                 and c.user != user):
                 ModAction.create(site, c.user, action='editflair',
                                  target=user, details='flair_edit')
@@ -2931,7 +3027,7 @@ class ApiController(RedditController, OAuth2ResourceController):
             link._commit()
             changed(link)
 
-            if ((site.is_moderator(c.user) or c.user_is_admin)):
+            if c.user_is_admin or site.is_moderator_with_perms(c.user, 'flair'):
                 ModAction.create(site, c.user, action='editflair',
                                  target=link, details='flair_edit')
 

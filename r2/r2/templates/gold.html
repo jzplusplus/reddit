@@ -81,7 +81,7 @@
 
 <div class="gold-form">
   <h1 class="goldgift">
-    ${_("reddit gold")} (<a href="/help/gold">help</a>)
+    ${_("reddit gold")} (<a href="/gold/about">help</a>)
   </h1>
 
   <form class="content">
@@ -93,7 +93,7 @@
     ${radio_type("goldtype", "gift", _("Give reddit gold to someone else"),
       "", thing.goldtype == "gift")}<br/>
     ${radio_type("goldtype", "creddits", _('Buy reddit gold "creddits"'),
-      unsafe("<a href='/help/creddits'>details</a>"),
+      unsafe("<a href='/wiki/creddits'>details</a>"),
       thing.goldtype == "creddits")}<br/>
     </%utils:round_field>
   </form>
@@ -119,7 +119,7 @@
 
   <%self:goldsec goldtype="gift">
     <%utils:round_field title="${_('How much gold do you wish to bestow?')}">
-      %if thing.user_creddits:
+      %if thing.user_creddits > 0:
         <select name="months" class="gold-dropdown">
           %for i in range(1, thing.user_creddits + 1):
              <option value="${i}">
