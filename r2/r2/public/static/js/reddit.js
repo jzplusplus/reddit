@@ -85,11 +85,16 @@ function get_form_fields(form, fields, filter_func) {
         filter_func = function(x) { return true; };
     /* consolidate the form's inputs for submission */
     $(form).find("select, input, textarea").not(".gray, :disabled").each(function() {
-            var type = $(this).attr("type");
-            if (filter_func(this) && 
-                ( (type != "radio" && type != "checkbox") || 
-                  $(this).is(":checked")) )
-                fields[$(this).attr("name")] = $(this).val();
+            var $el = $(this),
+                type = $el.attr("type");
+            if (!filter_func(this)) {
+                return;
+            }
+            if ($el.data('send-checked')) {
+                fields[$el.attr("name")] = $el.is(':checked');
+            } else if ((type != "radio" && type != "checkbox") || $el.is(":checked")) {
+                fields[$el.attr("name")] = $el.val();
+            }
         });
     if (fields.id == null) {
         fields.id = $(form).attr("id") ? ("#" + $(form).attr("id")) : "";
@@ -101,9 +106,9 @@ function form_error(form) {
     return function(req) {
         var msg
         if (req == 'ratelimit') {
-            msg = r.strings.rate_limit
+            msg = r.strings('rate_limit')
         } else {
-            msg = 'an error occurred while posting (status: ' + req.status + ')'
+            msg = r.strings('an_error_occurred', {status: req.status})
         }
         $(form).find('.status').text(msg)
     }
@@ -210,6 +215,20 @@ function unsave_thing(elem) {
     $(elem).thing().removeClass("saved");
 }
 
+function toggle_save(elem) {
+    var form = $(elem).parents("form").first()
+    var next_text = form.find('[name="executed"]')
+    var text = next_text.val()
+    if ($(elem).thing().hasClass("saved")) {
+        change_state(elem, 'unsave', undefined, true)
+    } else {
+        change_state(elem, 'save', undefined, true)
+    }
+    $(elem).thing().toggleClass("saved")
+    next_text.val($(elem).text())
+    $(elem).text(text)
+}
+
 function click_thing(elem) {
     var t = $(elem);
     if (!t.hasClass("thing")) {
@@ -278,79 +297,6 @@ function cancelToggleForm(elem, form_class, button_class, on_hide) {
     return false;
 };
 
-/* organic listing */
-
-function get_organic(elem, next) {
-    var listing = $(elem).parents(".organic-listing");
-    var thing = listing.find(".thing:visible");
-    if(listing.find(":animated").length) 
-        return false;
-    
-    /* note we are looking for .thing.link while empty entries (if the
-     * loader isn't working) will be .thing.stub -> no visual
-     * glitches */
-    var next_thing;
-    if (next) {
-        next_thing = thing.nextAll(".thing:not(.stub)").filter(":first");
-        if (next_thing.length == 0)
-            next_thing = thing.siblings(".thing:not(.stub)").filter(":first");
-    }
-    else {
-        next_thing = thing.prevAll(".thing:not(.stub)").filter(":first");
-        if (next_thing.length == 0)
-            next_thing = thing.siblings(".thing:not(.stub)").filter(":last");
-    }    
-
-    organic_help(listing, next_thing)
-    thing.fadeOut('fast', function() {
-            if(next_thing.length)
-                next_thing.fadeIn('fast', function() {
-
-                        /* make sure the next n are loaded */
-                        var n = 5;
-                        var t = thing;
-                        var to_fetch = [];
-                        for(var i = 0; i < 2*n; i++) {
-                            t = (next) ? t.nextAll(".thing:first") : 
-                                t.prevAll(".thing:first"); 
-                            if(t.length == 0) 
-                                t = t.end().parent()
-                                    .children( (next) ? ".thing:first" : 
-                                               ".thing:last");
-                            if(t.filter(".stub").length)
-                                to_fetch.push(t.thing_id());
-                            if(i >= n && to_fetch.length == 0)
-                                break;
-                        }
-                        if(to_fetch.length) {
-                            $.request("fetch_links",  
-                                      {links: to_fetch.join(','),
-                                              listing: listing.attr("id")}); 
-                        }
-                    })
-                    });
-};
-
-function organic_help(listing, thing) {
-    listing = listing || $('.organic-listing')
-    thing = thing || listing.find('.thing:visible')
-
-    var help = $('#spotlight-help')
-    if (!help.length) {
-        return
-    }
-
-    help.data('HelpBubble').hide(function() {
-        help.find('.help-section').hide()
-        if (thing.hasClass('promoted')) {
-            help.find('.help-promoted').show()
-        } else if (thing.hasClass('interestbar')) {
-            help.find('.help-interestbar').show()
-        } else {
-            help.find('.help-organic').show()
-        }
-    })
-}
 
 /* links */
 
@@ -580,9 +526,6 @@ function updateEventHandlers(thing) {
             $(this).addClass("click");
             /* set the click cookie. */
             add_thing_to_cookie(this, "recentclicks2");
-            /* remember this as the last thing clicked */
-            var wasorganic = $(this).parents('.organic-listing').length > 0;
-            last_click(thing, wasorganic);
         });
 
     if (listing.filter(".organic-listing").length) {
@@ -592,87 +535,30 @@ function updateEventHandlers(thing) {
            .click(function() {
                    var a = $(this).get(0);
                    change_state(a, 'hide', 
-                                function() { get_organic(a, 1); });
+                                function() { r.spotlight.next() });
                 });
         thing.find(".del-button a.yes")
             .click(function() {
                     var a = $(this).get(0);
-                    change_state(a, 'del', function() { get_organic(a, 1); });
+                    change_state(a, 'del',
+                                 function() { r.spotlight.next() });
                 });
         thing.find(".report-button a.yes")
             .click(function() {
                     var a = $(this).get(0);
                     change_state(a, 'report', 
-                                 function() { get_organic(a, 1); });
+                                 function() { r.spotlight.next() });
                     }); 
-
-        /*thing.find(".arrow.down")
-            .one("click", function() {
-                    var a = $(this).get(0);
-                    get_organic($(this).get(0), 1);
-                    }); */
     }
 };
 
-function last_click(thing, organic) {
-  /* called with zero arguments, marks the last-clicked item on this
-     page (to which the user probably clicked the 'back' button in
-     their browser). Otherwise sets the last-clicked item to the
-     arguments passed */
-  var cookie = "last_thing";
-  if(thing) {
-    var data = {href: window.location.href, 
-                what: $(thing).thing_id(),
-                organic: organic};
-    $.cookie_write({name: cookie, data: data});
-  } else {
-    var current = $.cookie_read(cookie).data;
-    if(current && current.href == window.location.href) {
-      /* if they got there organically, make sure that it's in the
-         organic box */
-      var olisting = $('.organic-listing');
-      if(current.organic && olisting.length == 1) {
-        if(olisting.find('.thing:visible').thing_id() == current.what) {
-          /* if it's available in the organic box, *and* it's the one
-             that's already shown, do nothing */
-
-        } else {
-          var thing = olisting.things(current.what);
-
-          if(thing.length > 0 && !thing.hasClass('stub')) {
-            /* if it's available in the organic box and not a stub,
-               switch index to it */
-            olisting.find('.thing:visible').hide();
-            thing.show();
-          } else {
-              /* either it's available in the organic box, but the
-                 data there is a stub, or it's not available at
-                 all. either way, we need a server round-trip */
-
-              /* remove the stub if it's there */
-              thing.remove();
-
-              /* add a new stub */
-              olisting.find('.thing:visible')
-                  .before('<div class="thing id-'+current.what+' stub" style="display: none"></div');
-              
-              /* and ask the server to fill it in */
-              $.request('fetch_links',
-                        {links: current.what,
-                                show: current.what,
-                                listing: olisting.attr('id')});
-          }
-        }
-      }
-      
-      /* mark it in the list */
-      $.things(current.what).addClass("last-clicked");
-
-      /* and wipe the cookie */
-      $.cookie_write({name: cookie, data: ""});
+function last_click() {
+    var fullname = r.analytics.breadcrumbs.lastClickFullname()
+    if (fullname && $('body').hasClass('listing-page')) {
+        $('.last-clicked').removeClass('last-clicked')
+        $('.id-' + fullname).last().addClass('last-clicked')
     }
-  }
-};
+}
 
 function login(elem) {
     if(cnameframe)
@@ -694,6 +580,10 @@ function fetch_title() {
     var status = url_field.find(".title-status");
     var url = $("#url").val();
     if (url) {
+        if ($('form#newlink textarea[name="title"]').val() &&
+            !confirm("This will replace your existing title, proceed?")) {
+                return
+        }
         status.show().text(reddit.status_msg.loading);
         error.hide();
         $.request("fetch_title", {url: url});
@@ -1250,6 +1140,9 @@ $(function() {
         
         /* visually mark the last-clicked entry */
         last_click();
+        $(window).on('pageshow', function() {
+            last_click()
+        })
 
         /* search form help expando */
         /* TODO: use focusin and focusout in jQuery 1.4 */
@@ -1276,8 +1169,6 @@ $(function() {
         $("#shortlink-text").click(function() {
             $(this).select();
         });
-
-        organic_help()
 
         /* ajax ynbutton */
         function toggleThis() { return toggle(this); }

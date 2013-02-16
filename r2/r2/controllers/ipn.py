@@ -35,7 +35,8 @@ from sqlalchemy.exc import IntegrityError
 import stripe
 
 from r2.controllers.reddit_base import RedditController
-from r2.lib.filters import _force_unicode
+from r2.lib.errors import MessageError
+from r2.lib.filters import _force_unicode, _force_utf8
 from r2.lib.log import log_text
 from r2.lib.strings import strings
 from r2.lib.utils import randstr, tup
@@ -247,7 +248,11 @@ def send_gift(buyer, recipient, months, days, signed, giftmessage, comment_id):
         )
 
     subject = sender + " just sent you reddit gold!"
-    send_system_message(recipient, subject, message)
+
+    try:
+        send_system_message(recipient, subject, message)
+    except MessageError:
+        g.log.error('send_gift: could not send system message')
 
     g.log.info("%s gifted %s to %s" % (buyer.name, amount, recipient.name))
     return comment
@@ -371,6 +376,13 @@ class IpnController(RedditController):
             # get the financial details
             auth = trans.find("authorization-amount-notification")
 
+            custom = None
+            cart = trans.find("shopping-cart")
+            if cart:
+                private_item_data = cart.find("merchant-private-item-data")
+                if private_item_data:
+                    custom = str(private_item_data.contents[0])
+
             if not auth:
                 # see if the payment was declinded
                 status = trans.findAll('financial-order-state')
@@ -385,17 +397,22 @@ class IpnController(RedditController):
                     g.log.error(("google transaction status: " +
                                  "'%s', status: %s")
                                 % (short_sn, [x.contents[0] for x in status]))
+                    if custom:
+                        payment_blob = validate_blob(custom)
+                        buyer = payment_blob['buyer']
+                        subject = _('gold order')
+                        msg = _('your order has been received and gold will'
+                                ' be delivered shortly. please bear with us'
+                                ' as google wallet payments can take up to an'
+                                ' hour to complete')
+                        try:
+                            send_system_message(buyer, subject, msg)
+                        except MessageError:
+                            g.log.error('gcheckout send_system_message failed')
             elif auth.find("financial-order-state"
                            ).contents[0] == "CHARGEABLE":
                 email = str(auth.find("email").contents[0])
                 payer_id = str(auth.find('buyer-id').contents[0])
-                # get the "secret"
-                custom = None
-                cart = trans.find("shopping-cart")
-                if cart:
-                    for item in cart.findAll("merchant-private-item-data"):
-                        custom = str(item.contents[0])
-                        break
                 if custom:
                     days = None
                     try:
@@ -582,7 +599,8 @@ class GoldPaymentController(RedditController):
     @textresponse(secret=VPrintable('secret', 50))
     def POST_goldwebhook(self, secret):
         self.validate_secret(secret)
-        status, passthrough, transaction_id, pennies = self.process_response()
+        res = self.process_response()
+        status, passthrough, transaction_id, pennies, months = res
 
         try:
             event_type = self.event_type_mappings[status]
@@ -591,7 +609,8 @@ class GoldPaymentController(RedditController):
                                                       transaction_id,
                                                       status))
             self.abort403()
-        self.process_webhook(event_type, passthrough, transaction_id, pennies)
+        self.process_webhook(event_type, passthrough, transaction_id, pennies,
+                             months)
 
     def validate_secret(self, secret):
         if secret != self.webhook_secret:
@@ -604,7 +623,8 @@ class GoldPaymentController(RedditController):
         """Extract status, passthrough, transaction_id, pennies."""
         raise NotImplementedError
 
-    def process_webhook(self, event_type, passthrough, transaction_id, pennies):
+    def process_webhook(self, event_type, passthrough, transaction_id, pennies,
+                        months):
         if event_type == 'noop':
             return
 
@@ -634,8 +654,7 @@ class GoldPaymentController(RedditController):
             if existing:
                 # note that we don't check status on existing, probably
                 # should update gold_table when a cancellation happens
-                reverse_gold_purchase(transaction_id, goldtype, buyer, pennies,
-                                      recipient)
+                reverse_gold_purchase(transaction_id)
         elif event_type == 'succeeded':
             if existing and existing.status == 'processed':
                 g.log.info('POST_goldwebhook skipping %s' % transaction_id)
@@ -645,9 +664,9 @@ class GoldPaymentController(RedditController):
             payer_id = ''
             subscription_id = None
             complete_gold_purchase(passthrough, transaction_id, payer_email,
-                                   payer_id, subscription_id, pennies, goldtype,
-                                   buyer, recipient, signed, giftmessage,
-                                   comment)
+                                   payer_id, subscription_id, pennies, months,
+                                   goldtype, buyer, recipient, signed,
+                                   giftmessage, comment)
         elif event_type == 'failed':
             subject = 'gold payment failed'
             msg = ('your gold payment has failed, contact %(gold_email)s for '
@@ -663,8 +682,7 @@ class GoldPaymentController(RedditController):
                    '%(gold_email)s for details' % {'gold_email':
                                                    g.goldthanks_email})
             send_system_message(buyer, subject, msg)
-            reverse_gold_purchase(transaction_id, goldtype, buyer, pennies,
-                                  recipient)
+            reverse_gold_purchase(transaction_id)
 
 
 class StripeController(GoldPaymentController):
@@ -683,14 +701,15 @@ class StripeController(GoldPaymentController):
         event = stripe.Event.construct_from(event_dict, g.STRIPE_SECRET_KEY)
         status = event.type
         if status == 'customer.created':
-            return status, None, None, None
+            return status, None, None, None, None
 
         charge = event.data.object
         description = charge.description
         passthrough, buyer_name = description.split('-', 1)
         transaction_id = 'S%s' % charge.id
         pennies = charge.amount
-        return status, passthrough, transaction_id, pennies
+        months, days = months_and_days_from_pennies(pennies)
+        return status, passthrough, transaction_id, pennies, months
 
     @validatedForm(VUser(),
                    token=nop('stripeToken'),
@@ -730,12 +749,12 @@ class StripeController(GoldPaymentController):
                 customer['active_card']['address_zip_check'] == 'fail'):
                 form.set_html('.status',
                               _('error: address verification failed'))
-                form.find('.stripe-submit').removeClass("disabled").end()
+                form.find('.stripe-submit').removeAttr('disabled').end()
                 return
 
             if customer['active_card']['cvc_check'] == 'fail':
                 form.set_html('.status', _('error: cvc check failed'))
-                form.find('.stripe-submit').removeClass("disabled").end()
+                form.find('.stripe-submit').removeAttr('disabled').end()
                 return
 
             charge = stripe.Charge.create(
@@ -746,6 +765,7 @@ class StripeController(GoldPaymentController):
             )
         except stripe.CardError as e:
             form.set_html('.status', 'error: %s' % e.message)
+            form.find('.stripe-submit').removeAttr('disabled').end()
         except stripe.InvalidRequestError as e:
             form.set_html('.status', _('invalid request'))
         except stripe.APIConnectionError as e:
@@ -781,8 +801,65 @@ class CoinbaseController(GoldPaymentController):
         transaction_id = 'C%s' % order['id']
         status = order['status']    # new/completed/cancelled
         pennies = int(order['total_native']['cents'])
+        months, days = months_and_days_from_pennies(pennies)
         passthrough = order['custom']
-        return status, passthrough, transaction_id, pennies
+        return status, passthrough, transaction_id, pennies, months
+
+
+class RedditGiftsController(GoldPaymentController):
+    """Handle notifications of gold purchases from reddit gifts.
+
+    Payment is handled by reddit gifts. Once an order is complete they can hit
+    this route to apply gold to a user's account.
+
+    The post should include data in the form:
+    {
+        'transaction_id', transaction_id,
+        'goldtype': goldtype,
+        'buyer': buyer name,
+        'pennies': pennies,
+        'months': months,
+        ['recipient': recipient name,]
+        ['giftmessage': message,]
+        ['signed': bool,]
+    }
+
+    """
+
+    name = 'redditgifts'
+    webhook_secret = g.RG_SECRET
+    event_type_mappings = {'succeeded': 'succeeded'}
+
+    def process_response(self):
+        data = request.POST
+
+        transaction_id = 'RG%s' % data['transaction_id']
+        pennies = int(data['pennies'])
+        months = int(data['months'])
+        status = 'succeeded'
+
+        buyer_name = data['buyer']
+        goldtype = data['goldtype']
+
+        buyer = Account._by_name(buyer_name)
+
+        blob = {
+            'goldtype': goldtype,
+            'account_id': buyer._id,
+            'account_name': buyer.name,
+            'status': 'initialized',
+        }
+
+        if goldtype == 'gift':
+            blob['recipient'] = data['recipient']
+            giftmessage = data.get('giftmessage', None)
+            blob['giftmessage'] = _force_utf8(giftmessage)
+            signed = data.get('signed')
+            blob['signed'] = True if signed == 'True' else False
+
+        passthrough = generate_blob(blob)
+
+        return status, passthrough, transaction_id, pennies, months
 
 
 class GoldException(Exception): pass
@@ -844,9 +921,19 @@ def gold_lock(user):
     return g.make_lock('gold_purchase', 'gold_%s' % user._id)
 
 
+def days_from_months(months):
+    if months >= 12:
+        assert months % 12 == 0
+        years = months / 12
+        days = years * 366
+    else:
+        days = months * 31
+    return days
+
+
 def complete_gold_purchase(secret, transaction_id, payer_email, payer_id,
-                           subscription_id, pennies, goldtype, buyer, recipient,
-                           signed, giftmessage, comment):
+                           subscription_id, pennies, months, goldtype, buyer,
+                           recipient, signed, giftmessage, comment):
     """After receiving a message from a payment processor, apply gold.
 
     Shared endpoint for all payment processing systems. Validation of gold
@@ -857,7 +944,7 @@ def complete_gold_purchase(secret, transaction_id, payer_email, payer_id,
     gold_recipient = recipient or buyer
     with gold_lock(gold_recipient):
         gold_recipient._sync_latest()
-        months, days = months_and_days_from_pennies(pennies)
+        days = days_from_months(months)
 
         if goldtype in ('onetime', 'autorenew'):
             admintools.engolden(buyer, days)
@@ -868,26 +955,22 @@ def complete_gold_purchase(secret, transaction_id, payer_email, payer_id,
                     message = strings.lounge_msg % dict(link=lounge_url)
                 else:
                     message = ":)"
-                send_system_message(buyer, subject, message)
             else:
                 subject = "your reddit gold has been renewed!"
                 message = ("see the details of your subscription on "
                            "[your userpage](/u/%s)" % buyer.name)
-                send_system_message(buyer, subject, message)
 
         elif goldtype == 'creddits':
             buyer._incr('gold_creddits', months)
             subject = "thanks for buying creddits!"
             message = ("To spend them, visit http://%s/gold or your favorite "
                        "person's userpage." % (g.domain))
-            send_system_message(buyer, subject, message)
 
         elif goldtype == 'gift':
             send_gift(buyer, recipient, months, days, signed, giftmessage,
                       comment)
             subject = "thanks for giving reddit gold!"
             message = "Your gift to %s has been delivered." % recipient.name
-            send_system_message(buyer, subject, message)
 
         status = 'processed'
         secret_pieces = [goldtype]
@@ -898,10 +981,15 @@ def complete_gold_purchase(secret, transaction_id, payer_email, payer_id,
 
         try:
             create_claimed_gold(transaction_id, payer_email, payer_id, pennies,
-                                days, secret_pieces, buyer._id, c.start_time,
+                                days, secret, buyer._id, c.start_time,
                                 subscr_id=subscription_id, status=status)
         except IntegrityError:
             g.log.error('gold: got duplicate gold transaction')
+
+        try:
+            send_system_message(buyer, subject, message)
+        except MessageError:
+            g.log.error('complete_gold_purchase: could not send system message')
 
 
 def subtract_gold_days(user, days):
@@ -915,12 +1003,31 @@ def subtract_gold_creddits(user, num):
     user._incr('gold_creddits', -num)
 
 
-def reverse_gold_purchase(transaction_id, goldtype, buyer, pennies,
-                          recipient=None):
+def reverse_gold_purchase(transaction_id):
+    transaction = retrieve_gold_transaction(transaction_id)
+
+    if not transaction:
+        raise GoldException('gold_table %s not found' % transaction_id)
+
+    buyer = Account._byID(int(transaction.account_id), data=True)
+    recipient = None
+    days = transaction.days
+    months = days / 31
+
+    secret = transaction.secret
+    if '{' in secret:
+        secret.strip('{}') # I goofed
+        pieces = secret.split(',')
+    else:
+        pieces = secret.split('-')
+    goldtype = pieces[0]
+    if goldtype == 'gift':
+        recipient_name, secret = pieces[1:]
+        recipient = Account._by_name(recipient_name)
+
     gold_recipient = recipient or buyer
     with gold_lock(gold_recipient):
         gold_recipient._sync_latest()
-        months, days = months_and_days_from_pennies(pennies)
 
         if goldtype in ('onetime', 'autorenew'):
             subtract_gold_days(buyer, days)

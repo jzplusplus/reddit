@@ -42,6 +42,7 @@ def load_controllers():
     from listingcontroller import ListingController
     from listingcontroller import HotController
     from listingcontroller import NewController
+    from listingcontroller import RisingController
     from listingcontroller import BrowseController
     from listingcontroller import MessageController
     from listingcontroller import RedditsController
@@ -83,5 +84,6 @@ def load_controllers():
     from ipn import IpnController
     from ipn import StripeController
     from ipn import CoinbaseController
+    from ipn import RedditGiftsController
 
     _reddit_controllers.update((name.lower(), obj) for name, obj in locals().iteritems())

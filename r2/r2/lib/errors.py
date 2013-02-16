@@ -42,6 +42,7 @@ error_list = dict((
         ('TOO_MANY_THING_IDS', _('you provided too many ids')),
         ('NOT_AUTHOR', _("you can't do that")),
         ('NOT_USER', _("you are not logged in as that user")),
+        ('LOGGED_IN', _("you are already logged in")),
         ('DELETED_LINK', _('the link you are commenting on has been deleted')),
         ('DELETED_COMMENT', _('that comment has been deleted')),
         ('DELETED_THING', _('that element has been deleted')),
@@ -60,8 +61,8 @@ error_list = dict((
         ('BAD_STRING', _("you used a character here that we can't handle")),
         ('BAD_BID', _("your bid must be at least $%(min)d per day and no more than to $%(max)d in total.")),
         ('ALREADY_SUB', _("that link has already been submitted")),
-        ('SUBREDDIT_EXISTS', _('that reddit already exists')),
-        ('SUBREDDIT_NOEXIST', _('that reddit doesn\'t exist')),
+        ('SUBREDDIT_EXISTS', _('that subreddit already exists')),
+        ('SUBREDDIT_NOEXIST', _('that subreddit doesn\'t exist')),
         ('SUBREDDIT_NOTALLOWED', _("you aren't allowed to post there.")),
         ('SUBREDDIT_REQUIRED', _('you must specify a subreddit')),
         ('BAD_SR_NAME', _('that name isn\'t going to work')),
@@ -78,7 +79,7 @@ error_list = dict((
         ('BAD_EMAILS', _('the following emails are invalid: %(emails)s')),
         ('NO_EMAILS', _('please enter at least one email address')),
         ('TOO_MANY_EMAILS', _('please only share to %(num)s emails at a time.')),
-        ('OVERSOLD', _('that reddit has already been oversold on %(start)s to %(end)s. Please pick another reddit or date.')),
+        ('OVERSOLD', _('that subreddit has already been oversold on %(start)s to %(end)s. Please pick another subreddit or date.')),
         ('BAD_DATE', _('please provide a date of the form mm/dd/yyyy')),
         ('BAD_DATE_RANGE', _('the dates need to be in order and not identical')),
         ('DATE_RANGE_TOO_LARGE', _('you must choose a date range of less than %(days)s days')),
@@ -90,8 +91,8 @@ error_list = dict((
         ('NO_TEXT', _('we need something here')),
         ('INVALID_CODE', _("we've never seen that code before")),
         ('CLAIMED_CODE', _("that code has already been claimed -- perhaps by you?")),
-        ('NO_SELFS', _("that reddit doesn't allow text posts")),
-        ('NO_LINKS', _("that reddit only allows text posts")),
+        ('NO_SELFS', _("that subreddit doesn't allow text posts")),
+        ('NO_LINKS', _("that subreddit only allows text posts")),
         ('TOO_OLD', _("that's a piece of history now; it's too late to reply to it")),
         ('BAD_CSS_NAME', _('invalid css name')),
         ('BAD_CSS', _('invalid css')),
@@ -241,3 +242,6 @@ class UserRequiredException(RedditError):
 class VerifiedUserRequiredException(RedditError):
     name = errors.VERIFIED_USER_REQUIRED
     code = 403
+
+
+class MessageError(Exception): pass

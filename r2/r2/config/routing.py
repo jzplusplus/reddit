@@ -68,6 +68,18 @@ def make_map():
     mc('/about/:location', controller='front', action='editreddit',
        location='about')
 
+    mc('/subreddits/create', controller='front', action='newreddit')
+    mc('/subreddits/search', controller='front', action='search_reddits')
+    mc('/subreddits/login', controller='forms', action='login')
+    mc('/subreddits/:where', controller='reddits', action='listing',
+       where='popular', requirements=dict(where="popular|new|banned"))
+
+    mc('/subreddits/mine/:where', controller='myreddits', action='listing',
+       where='subscriber',
+       requirements=dict(where='subscriber|contributor|moderator'))
+
+    # These routes are kept for backwards-compatibility reasons
+    # Using the above /subreddits/ ones instead is preferable
     mc('/reddits/create', controller='front', action='newreddit')
     mc('/reddits/search', controller='front', action='search_reddits')
     mc('/reddits/login', controller='forms', action='login')
@@ -174,10 +186,8 @@ def make_map():
 
     mc('/', controller='hot', action='listing')
 
-    listing_controllers = "hot|new|randomrising|comments"
-
     mc('/:controller', action='listing',
-       requirements=dict(controller=listing_controllers))
+       requirements=dict(controller="hot|new|rising|randomrising|comments"))
     mc('/saved', controller='user', action='saved_redirect')
 
     mc('/by_id/:names', controller='byId', action='listing')
@@ -265,6 +275,8 @@ def make_map():
     mc('/api/stripewebhook/gold/:secret', controller='stripe',
        action='goldwebhook')
     mc('/api/coinbasewebhook/gold/:secret', controller='coinbase',
+       action='goldwebhook')
+    mc('/api/rgwebhook/gold/:secret', controller='redditgifts',
        action='goldwebhook')
     mc('/api/ipn/:secret', controller='ipn', action='ipn')
     mc('/ipn/:secret', controller='ipn', action='ipn')

@@ -43,7 +43,7 @@ r.gold = {
 
         var form = $('.gold-form.cloneable:first').clone(),
             authorName = $link.thing().find('.entry .author:first').text(),
-            message = r.strings.gold_summary_comment_gift.replace('%(recipient)s', authorName),
+            message = r.strings('gold_summary_comment_gift', {recipient: authorName}),
             passthroughs = form.find('.passthrough'),
             cbBaseUrl = form.find('[name="cbbaseurl"]').val()
 
@@ -134,9 +134,8 @@ r.gold = {
             cardZip = form.find('.card-address_zip').val()
 
         var stripeResponseHandler = function(status, response) {
-            window.clearTimeout(workingTimer)
             if (response.error) {
-                submit.removeClass("disabled")
+                submit.removeAttr('disabled')
                 status.html(response.error.message)
             } else {
                 token.val(response.id)
@@ -147,27 +146,27 @@ r.gold = {
         Stripe.setPublishableKey(publicKey)
 
         if (!cardName) {
-            status.text(r.strings.missing_credit_name)
+            status.text(r.strings('missing_credit_name'))
         } else if (!(Stripe.validateCardNumber(cardNumber))) {
-            status.text(r.strings.bad_credit_number)
+            status.text(r.strings('bad_credit_number'))
         } else if (!Stripe.validateExpiry(expiryMonth, expiryYear)) {
-            status.text(r.strings.bad_credit_expiry)
+            status.text(r.strings('bad_credit_expiry'))
         } else if (!Stripe.validateCVC(cardCvc)) {
-            status.text(r.strings.bad_credit_cvc)
+            status.text(r.strings('bad_credit_cvc'))
         } else if (!cardAddress1) {
-            status.text(r.strings.missing_credit_address)
+            status.text(r.strings('missing_credit_address'))
         } else if (!cardCity) {
-            status.text(r.strings.missing_credit_city)
+            status.text(r.strings('missing_credit_city'))
         } else if (!cardState) {
-            status.text(r.strings.missing_credit_state)
+            status.text(r.strings('missing_credit_state'))
+        } else if (!cardCountry) {
+            status.text(r.strings('missing_credit_country'))
         } else if (!cardZip) {
-            status.text(r.strings.missing_credit_zip)
+            status.text(r.strings('missing_credit_zip'))
         } else {
 
-            var workingTimer = setTimeout(function () {
-                submit.addClass('disabled')
-            }, 200)
-
+            status.text('')
+            submit.attr('disabled', 'disabled')
             Stripe.createToken({
                     name: cardName,
                     number: cardNumber,

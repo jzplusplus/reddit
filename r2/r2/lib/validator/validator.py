@@ -46,7 +46,6 @@ from copy import copy
 from datetime import datetime, timedelta
 from curses.ascii import isprint
 import re, inspect
-import pycountry
 from itertools import chain
 from functools import wraps
 
@@ -1092,6 +1091,11 @@ class VUname(VRequired):
             self.param[0]: "a valid, unused, username",
         }
 
+class VLoggedOut(Validator):
+    def run(self):
+        if c.user_is_loggedin:
+            self.set_error(errors.LOGGED_IN)
+
 class VLogin(VRequired):
     def __init__(self, item, *a, **kw):
         VRequired.__init__(self, item, errors.WRONG_PASSWORD, *a, **kw)
@@ -1253,7 +1257,7 @@ class VMessageRecipient(VExistingUname):
                 if isinstance(s, FakeSubreddit):
                     raise NotFound, "fake subreddit"
                 if s._spam:
-                    raise NotFound, "banned community"
+                    raise NotFound, "banned subreddit"
                 return s
             except NotFound:
                 self.set_error(errors.SUBREDDIT_NOEXIST)
@@ -1804,10 +1808,7 @@ class VDestination(Validator):
             dest = request.referer or self.default or "/"
 
         ld = dest.lower()
-        if (ld.startswith("/") or
-            ld.startswith("http://") or
-            ld.startswith("https://")):
-
+        if ld.startswith(('/', 'http://', 'http://')):
             u = UrlParser(dest)
 
             if u.is_reddit_url(c.site):
@@ -1856,8 +1857,8 @@ class ValidAddress(Validator):
         elif not country:
             self.set_error(_("please pick a country"), "country")
         else:
-            country = pycountry.countries.get(alpha2=country)
-            if country.name not in self.allowed_countries:
+            country_name = g.countries.get(country)
+            if country_name not in self.allowed_countries:
                 self.set_error(_("Our ToS don't cover your country (yet). Sorry."), "country")
 
         # Make sure values don't exceed max length defined in the authorize.net
@@ -1882,7 +1883,7 @@ class ValidAddress(Validator):
                            company = company or "",
                            address = address,
                            city = city, state = state,
-                           zip = zipCode, country = country.name,
+                           zip = zipCode, country = country_name,
                            phoneNumber = phoneNumber or "")
 
 class ValidCard(Validator):

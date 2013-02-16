@@ -94,8 +94,8 @@ clean_ini:
 	rm $(INIFILES)
 
 #################### CSS file lists
-SPRITED_STYLESHEETS += reddit.css compact.css
-LESS_STYLESHEETS := goldinfo.less wiki.less
+SPRITED_STYLESHEETS += reddit.less compact.css
+LESS_STYLESHEETS := goldinfo.less wiki.less adminbar.less
 OTHER_STYLESHEETS := reddit-ie6-hax.css reddit-ie7-hax.css mobile.css highlight.css
 
 #################### Static Files
@@ -139,8 +139,8 @@ LESSC := r2/lib/contrib/less.js/bin/lessc
 CSS_COMPRESS := $(PYTHON) r2/lib/contrib/rcssmin.py
 CSS_SOURCE_DIR := $(STATIC_BUILD_DIR)/css
 
-PROCESSED_SPRITED_STYLESHEETS := $(addprefix $(STATIC_BUILD_DIR)/, $(SPRITED_STYLESHEETS))
-SPRITES := $(addprefix $(STATIC_BUILD_DIR)/, $(patsubst %.css,sprite-%.png, $(SPRITED_STYLESHEETS)))
+PROCESSED_SPRITED_STYLESHEETS := $(addprefix $(STATIC_BUILD_DIR)/, $(SPRITED_STYLESHEETS:.less=.css))
+SPRITES := $(addprefix $(STATIC_BUILD_DIR)/, $(patsubst %.css,sprite-%.png, $(SPRITED_STYLESHEETS:.less=.css)))
 
 LESS_OUTPUTS := $(addprefix $(STATIC_BUILD_DIR)/, $(patsubst %.less,%.css, $(LESS_STYLESHEETS)))
 
@@ -156,9 +156,12 @@ CSS_OUTPUTS = $(PROCESSED_STYLESHEETS) $(RTL_STYLESHEETS) $(SPRITES)
 css: $(STATIC_BUILDSTAMP) $(CSS_OUTPUTS)
 
 
+# the LESSC invocation is separated so the recipe fails in case of LESS errors.
 $(LESS_OUTPUTS): $(STATIC_BUILD_DIR)/%.css : $(CSS_SOURCE_DIR)/%.less
 	rm -f $@
-	$(LESSC) $< | $(CSS_COMPRESS) > $@
+	$(LESSC) $< > $@.tmp
+	$(CSS_COMPRESS) < $@.tmp > $@
+	rm $@.tmp
 
 $(MINIFIED_OTHER_STYLESHEETS): $(STATIC_BUILD_DIR)/%.css: $(CSS_SOURCE_DIR)/%.css
 	# when static file names are mangled, the original becomes a symlink to the mangled name
@@ -166,6 +169,15 @@ $(MINIFIED_OTHER_STYLESHEETS): $(STATIC_BUILD_DIR)/%.css: $(CSS_SOURCE_DIR)/%.cs
 	rm -f $@
 	$(CAT) $< | $(CSS_COMPRESS) > $@
 
+$(STATIC_BUILD_DIR)/sprite-%.png $(STATIC_BUILD_DIR)/%.css: $(CSS_SOURCE_DIR)/%.less $(STATIC_BUILDSTAMP)
+	# see above
+	rm -f $(STATIC_BUILD_DIR)/sprite-$*.png $(STATIC_BUILD_DIR)/$*.css
+	$(PYTHON) r2/lib/nymph.py $(CSS_SOURCE_DIR)/$*.less $(STATIC_BUILD_DIR)/sprite-$*.png > $(STATIC_BUILD_DIR)/$*.less.tmp
+	$(LESSC) $(STATIC_BUILD_DIR)/$*.less.tmp > $(STATIC_BUILD_DIR)/$*.css.tmp
+	$(CSS_COMPRESS) < $(STATIC_BUILD_DIR)/$*.css.tmp > $(STATIC_BUILD_DIR)/$*.css
+	rm $(STATIC_BUILD_DIR)/$*.less.tmp $(STATIC_BUILD_DIR)/$*.css.tmp
+
+# deprecated; remove once compact.scss has been converted to LESS
 $(STATIC_BUILD_DIR)/sprite-%.png $(STATIC_BUILD_DIR)/%.css: $(CSS_SOURCE_DIR)/%.css $(STATIC_BUILDSTAMP)
 	# see above
 	rm -f $(STATIC_BUILD_DIR)/sprite-$*.png $(STATIC_BUILD_DIR)/$*.css
@@ -189,7 +201,7 @@ clean_css:
 js: $(STATIC_BUILDSTAMP) $(JS_OUTPUTS)
 
 define JS_MODULE_TEMPLATE
-$(JS_MODULE_OUTPUTS_$(1)): $(JS_MODULE_DEPS_$(1))
+$(JS_MODULE_OUTPUTS_$(1)): $(JS_MODULE_DEPS_$(1)) r2/lib/js.py
 	# remove mangled output symlinks, similar to above.
 	rm -f $(JS_MODULE_OUTPUTS_$(1))
 	paster run standalone r2/lib/js.py -c "build_module('$(1)')"
@@ -235,3 +247,17 @@ clean_gzip:
 	rm -f $(GZIPPED)
 
 $(shell rm -f $(DEFS_FILE))
+
+#################### country list
+COUNTRY_FILE := $(STATIC_BUILD_DIR)/countries.json
+
+countries: $(COUNTRY_FILE)
+
+$(STATIC_BUILD_DIR):
+	mkdir -p $(STATIC_BUILD_DIR)
+
+$(COUNTRY_FILE): $(STATIC_BUILD_DIR)
+	$(PYTHON) r2/lib/countries.py > $(COUNTRY_FILE)
+
+clean_countries:
+	rm -f $(COUNTRY_FILE)

@@ -20,32 +20,20 @@
 # Inc. All Rights Reserved.
 ###############################################################################
 
-from r2.models import Link, Subreddit
-from r2.lib import utils
-from r2.lib.db.operators import desc
-from pylons import g
+import json
 
-count_period = g.rising_period
 
-#stubs
+def get_countries_and_codes():
+    """Return a dict of ISO Alpha2 country codes to country names."""
 
-def incr_counts(wrapped):
-    pass
+    # avoid importing this until this function is called since we're going to
+    # try our best to not import this at all in the app. it takes a tonne of
+    # memory!
+    import pycountry
 
-def incr_sr_count(sr):
-    pass
+    return {x.alpha2: x.name for x in pycountry.countries}
 
-def get_link_counts(period = count_period):
-    links = Link._query(Link.c._date >= utils.timeago(period),
-                        limit=50, data = True)
-    return dict((l._fullname, (0, l.sr_id)) for l in links)
 
-def get_sr_counts():
-    srs = utils.fetch_things2(Subreddit._query(sort=desc("_date")))
-
-    return dict((sr._fullname, sr._ups) for sr in srs)
-
-try:
-    from r2admin.lib.count import *
-except ImportError:
-    pass
+if __name__ == "__main__":
+    # Print out the country dict in JSON format for use in the Makefile.
+    print json.dumps(get_countries_and_codes(), indent=2, sort_keys=True)

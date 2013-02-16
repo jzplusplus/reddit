@@ -40,7 +40,7 @@ from BeautifulSoup import BeautifulSoup, SoupStrainer
 
 from time import sleep
 from datetime import datetime, timedelta
-from pylons import g
+from pylons import c, g
 from pylons.i18n import ungettext, _
 from r2.lib.filters import _force_unicode, _force_utf8
 from mako.filters import url_escape
@@ -251,7 +251,7 @@ def path_component(s):
 def get_title(url):
     """Fetches the contents of url and extracts (and utf-8 encodes)
        the contents of <title>"""
-    if not url or not (url.startswith('http://') or url.startswith('https://')):
+    if not url or not url.startswith(('http://', 'https://')):
         return None
 
     try:
@@ -305,7 +305,9 @@ def extract_title(data):
     to_trim = re.search(u'\s[\u00ab\u00bb\u2013\u2014|-]\s',
                         reverse_title,
                         flags=re.UNICODE)
-    if to_trim:
+
+    # only trim if it won't take off over half the title
+    if to_trim and to_trim.end() < len(title) / 2:
         title = title[:-(to_trim.end())]
 
     return title.encode('utf-8').strip()
@@ -519,17 +521,16 @@ class UrlParser(object):
     def path_has_subreddit(self):
         """
         utility method for checking if the path starts with a
-        subreddit specifier (namely /r/ or /reddits/).
+        subreddit specifier (namely /r/ or /subreddits/).
         """
-        return (self.path.startswith('/r/') or
-                self.path.startswith('/reddits/'))
+        return self.path.startswith(('/r/', '/subreddits/', '/reddits/'))
 
     def get_subreddit(self):
         """checks if the current url refers to a subreddit and returns
         that subreddit object.  The cases here are:
 
           * the hostname is unset or is g.domain, in which case it
-            looks for /r/XXXX or /reddits.  The default in this case
+            looks for /r/XXXX or /subreddits.  The default in this case
             is Default.
           * the hostname is a cname to a known subreddit.
 
@@ -541,7 +542,7 @@ class UrlParser(object):
             if not self.hostname or self.hostname.startswith(g.domain):
                 if self.path.startswith('/r/'):
                     return Subreddit._by_name(self.path.split('/')[2])
-                elif self.path.startswith('/reddits/'):
+                elif self.path.startswith(('/subreddits/', '/reddits/')):
                     return Sub
                 else:
                     return DefaultSR()
@@ -768,6 +769,9 @@ def fetch_things2(query, chunk_size = 100, batch_fn = None, chunks = False):
     """Incrementally run query with a limit of chunk_size until there are
     no results left. batch_fn transforms the results for each chunk
     before returning."""
+
+    assert query._sort, "you must specify the sort order in your query!"
+
     orig_rules = deepcopy(query._rules)
     query._limit = chunk_size
     items = list(query)
@@ -1021,15 +1025,9 @@ def filter_links(links, filter_spam = False, multiple = True):
     # among those, show them the hottest one
     return links if multiple else links[0]
 
-def link_duplicates(article):
-    # don't bother looking it up if the link doesn't have a URL anyway
-    if getattr(article, 'is_self', False):
-        return []
-
-    return url_links(article.url, exclude = article._fullname)
-
-def url_links(url, exclude=None):
-    from r2.models import Link, NotFound
+def url_links_builder(url, exclude=None):
+    from r2.models import IDBuilder, Link, NotFound
+    from operator import attrgetter
 
     try:
         links = tup(Link._by_url(url, None))
@@ -1038,7 +1036,21 @@ def url_links(url, exclude=None):
 
     links = [ link for link in links
                    if link._fullname != exclude ]
-    return links
+    links.sort(key=attrgetter('num_comments'), reverse=True)
+
+    # don't show removed links in duplicates unless admin or mod
+    # or unless it's your own post
+    def include_link(link):
+        return (not link._spam or
+                (c.user_is_loggedin and
+                    (link.author_id == c.user._id or
+                        c.user_is_admin or
+                        link.subreddit.is_moderator(c.user))))
+
+    builder = IDBuilder([link._fullname for link in links],
+                        skip=True, keep_fn=include_link)
+
+    return builder
 
 class TimeoutFunctionException(Exception):
     pass

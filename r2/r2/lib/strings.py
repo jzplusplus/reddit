@@ -68,7 +68,7 @@ string_dict = dict(
 
     already_submitted = _("that link has already been submitted, but you can try to [submit it again](%s)."),
 
-    multiple_submitted = _("that link has been submitted to multiple reddits. you can try to [submit it again](%s)."),
+    multiple_submitted = _("that link has been submitted to multiple subreddits. you can try to [submit it again](%s)."),
 
     user_deleted = _("your account has been deleted, but we won't judge you for it."),
 
@@ -84,21 +84,21 @@ string_dict = dict(
 
     friends = _('to view reddit with only submissions from your friends, use [reddit.com/r/friends](%s)'),
 
-    sr_created = _('your reddit has been created'),
+    sr_created = _('your subreddit has been created'),
 
     more_info_link = _("visit [%(link)s](%(link)s) for more information"),
 
     sr_messages = dict(
-        empty =  _('you have not subscribed to any reddits.'),
-        subscriber =  _('below are the reddits you have subscribed to'),
-        contributor =  _('below are the reddits that you are an approved submitter on.'),
-        moderator = _('below are the reddits that you have moderator access to.')
+        empty =  _('you have not subscribed to any subreddits.'),
+        subscriber =  _('below are the subreddits you have subscribed to'),
+        contributor =  _('below are the subreddits that you are an approved submitter on.'),
+        moderator = _('below are the subreddits that you have moderator access to.')
         ),
 
-    sr_subscribe =  _('click the `subscribe` or `unsubscribe` buttons to choose which reddits appear on your front page.'),
+    sr_subscribe =  _('click the `subscribe` or `unsubscribe` buttons to choose which subreddits appear on your front page.'),
 
-    searching_a_reddit = _('you\'re searching within the [%(reddit_name)s](%(reddit_link)s) reddit. '+
-                           'you can also search within [all reddits](%(all_reddits_link)s)'),
+    searching_a_reddit = _('you\'re searching within the [%(reddit_name)s](%(reddit_link)s) subreddit. '+
+                           'you can also search within [all subreddits](%(all_reddits_link)s)'),
 
     css_validator_messages = dict(
         broken_url = _('"%(brokenurl)s" is not a valid URL'),
@@ -121,7 +121,7 @@ string_dict = dict(
 
     submit_link = _("""You are submitting a link. The key to a successful submission is interesting content and a descriptive title."""),
     submit_text = _("""You are submitting a text-based post. Speak your mind. A title is required, but expanding further in the text field is not. Beginning your title with "vote up if" is violation of intergalactic law."""),
-    iphone_first = _("You should consider using [reddit's mobile interface](http://i.reddit.com/)."),
+    compact_suggest = _("Looks like you're browsing on a small screen. Would you like to try [reddit's mobile interface](%(url)s)?"),
     verify_email = _("we're going to need to verify your email address for you to proceed."),
     verify_email_submit = _("you'll be able to submit more frequently once you verify your email address"),
     email_verified =  _("your email address has been verfied"),
@@ -175,8 +175,8 @@ Note: there are a couple of places outside of your subreddit where someone can c
     go = _("go"),
     view_subreddit_traffic = _("view subreddit traffic"),
 
-    an_error_occurred = _("an error occurred"),
-    an_error_occurred_friendly = _("an error occurred. please try again later!"),
+    an_error_occurred = _("an error occurred (status: %(status)s)"),
+    an_error_occurred_friendly = _("an error occurred. please try again later! (status: %(status)s)"),
     rate_limit = _("please wait a few seconds and try again."),
     subscribed_multi = _("multireddit of your subscriptions"),
     mod_multi = _("multireddit of subreddits you moderate"),
@@ -192,6 +192,7 @@ Note: there are a couple of places outside of your subreddit where someone can c
     missing_credit_address = _("missing address"),
     missing_credit_city = _("missing city"),
     missing_credit_state = _("missing state or province"),
+    missing_credit_country = _("missing country"),
     missing_credit_zip = _("missing zip code"),
 
     permissions = dict(

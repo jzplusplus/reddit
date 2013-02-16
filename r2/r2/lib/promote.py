@@ -22,7 +22,7 @@
 
 from __future__ import with_statement
 
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from datetime import datetime, timedelta
 import json
 import math
@@ -40,10 +40,11 @@ from r2.lib import (
     inventory,
 )
 from r2.lib.db.queries import set_promote_status
+from r2.lib.memoize import memoize
 from r2.lib.organic import keep_fresh_links
 from r2.lib.strings import strings
 from r2.lib.template_helpers import get_domain
-from r2.lib.utils import UniqueIterator, tup, to_date
+from r2.lib.utils import UniqueIterator, tup, to_date, weighted_lottery
 from r2.models import (
     Account,
     AdWeight,
@@ -784,122 +785,61 @@ def make_daily_promotions(offset=0, test=False):
                         "promotions: %r" % error_campaigns)
 
 
+PromoTuple = namedtuple('PromoTuple', ['link', 'weight', 'campaign'])
+
+
 def get_promotion_list(user, site):
-    # site is specified, pick an ad from that site
     if not isinstance(site, FakeSubreddit):
         srids = set([site._id])
     elif isinstance(site, MultiReddit):
         srids = set(site.sr_ids)
-    # site is Fake, user is not.  Pick based on their subscriptions.
     elif user and not isinstance(user, FakeAccount):
         srids = set(Subreddit.reverse_subscriber_ids(user) + [""])
-    # both site and user are "fake" -- get the default subscription list
     else:
-        srids = set(Subreddit.user_subreddits(None, True) + [""])
+        srids = set(Subreddit.user_subreddits(None, ids=True) + [""])
 
-    return get_promotions_cached(srids)
+    tuples = get_promotion_list_cached(srids)
+    return [PromoTuple(*t) for t in tuples]
 
 
-def get_promotions_cached(sites):
+@memoize('promotion_list', time=60)
+def get_promotion_list_cached(sites):
     weights = get_live_promotions(sites)
-    if weights:
-        available = {}
-        campaigns = {}
-        for sr_id, sr_weights in weights.iteritems():
-            if sr_id in sites:
-                for l, w, cid in sr_weights:
-                    available[l] = available.get(l, 0) + w
-                    campaigns[l] = cid
-        # sort the available list by weight
-        links = available.keys()
-        links.sort(key=lambda x: -available[x])
-        norm = sum(available.values())
-        # return a sorted list of (link, norm_weight)
-        return [(l, available[l] / norm, campaigns[l]) for l in links]
+    if not weights:
+        return []
+
+    promos = []
+    total = 0.
+    for sr_id, sr_weights in weights.iteritems():
+        if sr_id not in sites:
+            continue
+        for link, weight, campaign in sr_weights:
+            total += weight
+            promos.append((link, weight, campaign))
+
+    return [(link, weight / total, campaign)
+            for link, weight, campaign in promos]
+
+
+def lottery_promoted_links(user, site, n=10):
+    """Run weighted_lottery to order and choose a subset of promoted links."""
+    promo_tuples = get_promotion_list(user, site)
+    weights = {p: p.weight for p in promo_tuples}
+    selected = []
+    while weights and len(selected) < n:
+        s = weighted_lottery(weights)
+        del weights[s]
+        selected.append(s)
+    return selected
+
+
+def sample_promoted_links(user, site, n=10):
+    """Return a selection of promoted links."""
+    promo_tuples = get_promotion_list(user, site)
+    if len(promo_tuples) <= n:
+        return promo_tuples
     else:
-        return []
-
-def randomized_promotion_list(user, site):
-    promos = get_promotion_list(user, site)
-    # no promos, no problem
-    if not promos:
-        return []
-    # more than two: randomize
-    elif len(promos) > 1:
-        n = random.uniform(0, 1)
-        for i, (l, w, cid) in enumerate(promos):
-            n -= w
-            if n < 0:
-                promos = promos[i:] + promos[:i]
-                break
-    # fall thru for the length 1 case here as well
-    return [(l, cid) for l, w, cid in promos]
-
-
-def insert_promoted(link_names, pos, promoted_every_n=5):
-    """
-    Inserts promoted links into an existing organic list. Destructive
-    on `link_names'
-    """
-    promo_tuples = randomized_promotion_list(c.user, c.site)
-    promoted_link_names, campaign_ids = zip(*promo_tuples) if promo_tuples else ([], [])
-
-    if not promoted_link_names:
-        return link_names, pos, {}
-
-    campaigns_by_link = dict(promo_tuples)
-
-    # no point in running the builder over more promoted links than
-    # we'll even use
-    max_promoted = max(1, len(link_names) / promoted_every_n)
-    builder = IDBuilder(promoted_link_names, keep_fn=keep_fresh_links,
-                        skip=True)
-    promoted_items = builder.get_items()[0]
-
-    focus = None
-    if promoted_items:
-        focus = promoted_items[0]._fullname
-        # insert one promoted item for every N items
-        for i, item in enumerate(promoted_items):
-            p = i * (promoted_every_n + 1)
-            if p > len(link_names):
-                break
-            p += pos
-            if p > len(link_names):
-                p = p % len(link_names)
-
-            link_names.insert(p, item._fullname)
-
-    link_names = filter(None, link_names)
-    if focus:
-        try:
-            pos = link_names.index(focus)
-        except ValueError:
-            pass
-    # don't insert one at the head of the list 50% of the time for
-    # logged in users, and 50% of the time for logged-off users when
-    # the pool of promoted links is less than 3 (to avoid showing the
-    # same promoted link to the same person too often)
-    if ((c.user_is_loggedin or len(promoted_items) < 3) and
-        random.choice((True, False))):
-        pos = (pos + 1) % len(link_names)
-
-    return list(UniqueIterator(link_names)), pos, campaigns_by_link
-
-def benchmark_promoted(user, site, pos=0, link_sample=50, attempts=100):
-    c.user = user
-    c.site = site
-    link_names = ["blah%s" % i for i in xrange(link_sample)]
-    res = {}
-    for i in xrange(attempts):
-        names, p, campaigns_by_link = insert_promoted(link_names[::], pos)
-        name = names[p]
-        res[name] = res.get(name, 0) + 1
-    res = list(res.iteritems())
-    res.sort(key=lambda x: x[1], reverse=True)
-    expected = dict(get_promotion_list(user, site))
-    for l, v in res:
-        print "%s: %5.3f %3.5f" % (l, float(v) / attempts, expected.get(l, 0))
+        return random.sample(promo_tuples, n)
 
 
 def get_total_run(link):

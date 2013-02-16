@@ -43,16 +43,6 @@ class MenuHandler(StringHandler):
         except KeyError:
             return getattr(plurals, attr)
 
-# selected menu styles, primarily used on the main nav bar
-menu_selected=StringHandler(hot          = _("what's hot"),
-                            new          = _("what's new"),
-                            top          = _("top scoring"),
-                            controversial= _("most controversial"),
-                            saved        = _("saved"),
-                            recommended  = _("recommended"),
-                            promote      = _('promote'),
-                            )
-
 # translation strings for every menu on the site
 menu =   MenuHandler(hot          = _('hot'),
                      new          = _('new'),
@@ -128,7 +118,7 @@ menu =   MenuHandler(hot          = _('hot'),
                      home         = _("home"),
                      about        = _("about"),
                      edit_subscriptions = _("edit subscriptions"),
-                     community_settings = _("community settings"),
+                     community_settings = _("subreddit settings"),
                      moderators   = _("edit moderators"),
                      modmail      = _("moderator mail"),
                      contributors = _("edit approved submitters"),
@@ -147,7 +137,7 @@ menu =   MenuHandler(hot          = _('hot'),
 
                      popular      = _("popular"),
                      create       = _("create"),
-                     mine         = _("my reddits"),
+                     mine         = _("my subreddits"),
 
                      i18n         = _("help translate"),
                      errors       = _("errors"),
@@ -373,13 +363,6 @@ class NamedButton(NavButton):
         NavButton.__init__(self, menutext, name if dest is None else dest,
                            sr_path = sr_path, nocname=nocname, **kw)
 
-    def selected_title(self):
-        """Overrides selected_title to use menu_selected dictionary"""
-        try:
-            return menu_selected[self.name]
-        except KeyError:
-            return NavButton.selected_title(self)
-
 class JsButton(NavButton):
     """A button which fires a JS event and thus has no path and cannot
     be in the 'selected' state"""
@@ -494,23 +477,6 @@ class RecSortMenu(SortMenu):
     """Sort menu for recommendation page"""
     default   = 'new'
     options   = ('hot', 'new', 'top', 'controversial', 'relevance')
-
-class NewMenu(SimplePostMenu):
-    name      = 'sort'
-    default   = 'rising'
-    options   = ('new', 'rising')
-    type = 'flatlist'
-    use_post  = True
-
-    def __init__(self, **kw):
-        kw['title'] = ""
-        SimplePostMenu.__init__(self, **kw)
-
-    @classmethod
-    def operator(self, sort):
-        if sort == 'new':
-            return operators.desc('_date')
-        
 
 class KindMenu(SimplePostMenu):
     name    = 'kind'

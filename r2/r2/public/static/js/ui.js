@@ -1,45 +1,31 @@
-r.ui = {}
-
-r.ui.Base = function(el) {
-    this.$el = $(el)
-}
-
-r.ui.collapsibleSideBox = function(id) {
-    var $el = $('#'+id)
-    return new r.ui.Collapse($el.find('.title'), $el.find('.content'), id)
-}
-
-r.ui.Collapse = function(el, target, key) {
-    r.ui.Base.call(this, el)
-    this.target = target
-    this.key = 'ui.collapse.' + key
-    this.isCollapsed = store.get(this.key) == true
-    this.$el.click($.proxy(this, 'toggle', null, false))
-    this.toggle(this.isCollapsed, true)
-}
-r.ui.Collapse.prototype = {
-    animDuration: 200,
-
-    toggle: function(collapsed, immediate) {
-        if (collapsed == null) {
-            collapsed = !this.isCollapsed
-        }
-
-        var duration = immediate ? 0 : this.animDuration
-        if (collapsed) {
-            $(this.target).slideUp(duration)
-        } else {
-            $(this.target).slideDown(duration)
-        }
-
-        this.isCollapsed = collapsed
-        store.set(this.key, collapsed)
-        this.update()
-    },
-
-    update: function() {
-        this.$el.find('.collapse-button').text(this.isCollapsed ? '+' : '-')
+r.ui.init = function() {
+    // welcome bar
+    if ($.cookie('reddit_first')) {
+        // save welcome seen state and delete obsolete cookie
+        $.cookie('reddit_first', null, {domain: r.config.cur_domain})
+        store.set('ui.shown.welcome', true)
+    } else if (store.get('ui.shown.welcome') != true) {
+        $('.infobar.welcome').show()
+        store.set('ui.shown.welcome', true)
     }
+
+    // mobile suggest infobar
+    var smallScreen = window.matchMedia
+                      ? matchMedia('(max-device-width: 700px)').matches
+                      : $(window).width() < 700,
+        onFrontPage = $.url().attr('path') == '/'
+    if (smallScreen && onFrontPage && r.config.renderstyle != 'compact') {
+        var infobar = $('<div class="infobar mellow">')
+            .html(r.utils.formatMarkdownLinks(
+                r.strings('compact_suggest', {
+                    url: location + '.compact'
+                })
+            ))
+        $('body > .content > :not(.infobar):first').before(infobar)
+    }
+
+    r.ui.HelpBubble.init()
+    r.ui.PermissionEditor.init()
 }
 
 r.ui.Form = function(el) {
@@ -141,7 +127,7 @@ r.ui.Form.prototype = $.extend(new r.ui.Base(), {
     },
 
     _handleNetError: function(result, err, xhr) {
-        this.showStatus(r.strings.an_error_occurred + ' (' + xhr.status + ')', true)
+        this.showStatus(r.strings('an_error_occurred', {status: xhr.status}), true)
     }
 })
 
@@ -325,6 +311,11 @@ r.ui.PermissionEditor.prototype = $.extend(new r.ui.Base(), {
 
     hide: function() {
         if (this.$menu) {
+            if (this.embedded) {
+                this.original_perms = this._getNewPerms()
+                this.$permissions_field
+                    .val(this._serializePerms(this.original_perms))
+            }
             this.$menu.remove()
             this.$menu = null
             this.updateSummary()
@@ -355,13 +346,9 @@ r.ui.PermissionEditor.prototype = $.extend(new r.ui.Base(), {
             spans.push(this._renderBit("all")
                 .toggleClass("added", this.original_perms.all != true))
         } else {
-            if (this.original_perms.all) {
-                if (!this.embedded || !new_perms) {
-                    spans.push(this._renderBit("all")
-                        .toggleClass("removed",
-                                    !this.embedded && new_perms != null))
-                }
-            } else {
+            if (this.original_perms.all && !new_perms) {
+                spans.push(this._renderBit("all"))
+            } else if (!this.original_perms.all) {
                 for (var perm in this.original_perms) {
                     if (this.original_perms[perm]) {
                         if (this.embedded && !(new_perms && !new_perms[perm])) {
@@ -412,8 +399,3 @@ r.ui.PermissionEditor.prototype = $.extend(new r.ui.Base(), {
         this.hide()
     }
 })
-
-r.ui.init = function() {
-    r.ui.HelpBubble.init()
-    r.ui.PermissionEditor.init()
-}

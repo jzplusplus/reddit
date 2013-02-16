@@ -96,6 +96,7 @@ from r2.models import (
     NotFound,
     Random,
     RandomNSFW,
+    RandomSubscription,
     Sub,
     Subreddit,
     valid_admin_cookie,
@@ -107,7 +108,7 @@ from r2.models import (
 NEVER = datetime(2037, 12, 31, 23, 59, 59)
 DELETE = datetime(1970, 01, 01, 0, 0, 1)
 
-cache_affecting_cookies = ('reddit_first', 'over18', '_options')
+cache_affecting_cookies = ('over18', '_options')
 
 class Cookies(dict):
     def add(self, name, value, *k, **kw):
@@ -282,63 +283,10 @@ def set_recent_clicks():
             #if the cookie wasn't valid, clear it
             set_user_cookie('recentclicks2', '')
 
-def read_mod_cookie():
-    cook = [s.split('=')[0:2] for s in read_user_cookie('mod').split(':') if s]
-    if cook:
-        set_user_cookie('mod', '')
-
-def firsttime():
-    if (request.user_agent and
-        ('iphone' in request.user_agent.lower() or
-         'android' in request.user_agent.lower()) and
-        not get_redditfirst('mobile_suggest')):
-        set_redditfirst('mobile_suggest', 'first')
-        return 'mobile_suggest'
-    elif get_redditfirst('firsttime'):
-        return False
-    else:
-        set_redditfirst('firsttime', 'first')
-        return True
-
-def get_redditfirst(key, default=None):
-    try:
-        val = c.cookies['reddit_first'].value
-        # on cookie presence, return as much
-        if default is None:
-            default = True
-        cookie = simplejson.loads(val)
-        return cookie[key]
-    except (ValueError, TypeError, KeyError), e:
-        # it's not a proper json dict, or the cookie isn't present, or
-        # the key isn't part of the cookie; we don't really want a
-        # broken cookie to propogate an exception up
-        return default
-
-def set_redditfirst(key, val):
-    try:
-        cookie = simplejson.loads(c.cookies['reddit_first'].value)
-        cookie[key] = val
-    except (ValueError, TypeError, KeyError), e:
-        # invalid JSON data; we'll just construct a new cookie
-        cookie = {key: val}
-
-    c.cookies['reddit_first'] = Cookie(simplejson.dumps(cookie),
-                                       expires=NEVER)
-
-# this cookie is also accessed by organic.js, so changes to the format
-# will have to be made there as well
-organic_pos_key = 'organic_pos'
-def organic_pos():
-    "organic_pos() -> (calc_date = str(), pos  = int())"
-    pos = get_redditfirst(organic_pos_key, 0)
-    if not isinstance(pos, int):
-        pos = 0
-    return pos
-
-def set_organic_pos(pos):
-    "set_organic_pos(str(), int()) -> None"
-    set_redditfirst(organic_pos_key, pos)
-
+def delete_obsolete_cookies():
+    for cookie_name in c.cookies:
+        if cookie_name.endswith(("_last_thing", "_mod")):
+            c.cookies[cookie_name] = Cookie("", expires=DELETE)
 
 def over18():
     if c.user.pref_over_18 or c.user_is_admin:
@@ -395,7 +343,7 @@ def set_subreddit():
     elif '-' in sr_name:
         sr_names = sr_name.split('-')
         if not sr_names[0].lower() == All.name.lower():
-            abort(404)
+            redirect_to("/subreddits/search?q=%s" % sr_name)
         srs = Subreddit._by_name(sr_names[1:], stale=can_stale).values()
         srs = [sr for sr in srs if not isinstance(sr, FakeSubreddit)]
         if not srs:
@@ -408,7 +356,7 @@ def set_subreddit():
         except NotFound:
             sr_name = chksrname(sr_name)
             if sr_name:
-                redirect_to("/reddits/search?q=%s" % sr_name)
+                redirect_to("/subreddits/search?q=%s" % sr_name)
             elif not c.error_page and not request.path.startswith("/api/login/") :
                 abort(404)
 
@@ -679,6 +627,13 @@ def request_timer_name(action):
     return "service_time.web." + action
 
 
+def flatten_response(content):
+    """Convert a content iterable to a string, properly handling unicode."""
+    # TODO: it would be nice to replace this with response.body someday
+    # once unicode issues are ironed out.
+    return "".join(_force_utf8(x) for x in tup(content) if x)
+
+
 class MinimalController(BaseController):
 
     allow_stylesheets = False
@@ -700,7 +655,6 @@ class MinimalController(BaseController):
                         c.cname,
                         request.fullpath,
                         c.over18,
-                        c.firsttime,
                         c.extension,
                         c.render_style,
                         cookies_key)
@@ -723,6 +677,17 @@ class MinimalController(BaseController):
         c.domain_prefix = request.environ.get("reddit-domain-prefix",
                                               g.domain_prefix)
         c.secure = request.host in g.secure_domains
+
+        # wsgi.url_scheme is used in generating absolute urls, such as by webob
+        # for translating some of our relative-url redirects to rfc compliant
+        # absolute-url ones. TODO: consider using one of webob's methods of
+        # setting wsgi.url_scheme based on incoming request headers added by
+        # upstream things like stunnel/haproxy.
+        if c.secure:
+            request.environ["wsgi.url_scheme"] = "https"
+
+        url = urlparse(request.url)
+        c.request_origin = url.scheme + "://" + url.netloc
 
         #check if user-agent needs a dose of rate-limiting
         if not c.error_page:
@@ -764,11 +729,10 @@ class MinimalController(BaseController):
 
         # if the action raised an HTTPException (i.e. it aborted) then pylons
         # will have replaced response with the exception itself.
-        is_exception_response = getattr(response, "_exception", False)
+        c.is_exception_response = getattr(response, "_exception", False)
 
-        if c.response_wrapper and not is_exception_response:
-            content = "".join(_force_utf8(x)
-                              for x in tup(response.content) if x)
+        if c.response_wrapper and not c.is_exception_response:
+            content = flatten_response(response.content)
             wrapped_content = c.response_wrapper(content)
             response.content = wrapped_content
 
@@ -784,8 +748,9 @@ class MinimalController(BaseController):
             and request.method.upper() == 'GET'
             and (not c.user_is_loggedin or c.allow_loggedin_cache)
             and not c.used_cache
-            and response.status_int not in (429, 503)
-            and not is_exception_response):
+            and response.status_int != 429
+            and not response.status.startswith("5")
+            and not c.is_exception_response):
             try:
                 g.pagecache.set(self.request_key(),
                                 (response._current_obj(), c.cookies),
@@ -818,6 +783,8 @@ class MinimalController(BaseController):
         # the mean time so that we don't have dead objects hanging
         # around taking up memory
         g.reset_caches()
+
+        c.request_timer.intermediate("post")
 
         # push data to statsd
         c.request_timer.stop()
@@ -918,6 +885,11 @@ class RedditController(MinimalController):
         c.cookies[g.admin_cookie] = Cookie(value='', expires=DELETE)
 
     def pre(self):
+        record_timings = g.admin_cookie in request.cookies or g.debug
+        admin_bar_eligible = response.content_type == 'text/html'
+        if admin_bar_eligible and record_timings:
+            g.stats.start_logging_timings()
+
         MinimalController.pre(self)
 
         set_cnameframe()
@@ -940,7 +912,7 @@ class RedditController(MinimalController):
             for cookietype, count in cookie_counts.iteritems():
                 g.stats.simple_event("cookie.%s" % cookietype, count)
 
-        c.firsttime = firsttime()
+        delete_obsolete_cookies()
 
         # the user could have been logged in via one of the feeds 
         maybe_admin = False
@@ -977,8 +949,6 @@ class RedditController(MinimalController):
             if not c.user._loaded:
                 c.user._load()
             c.modhash = c.user.modhash()
-            if request.method.upper() == 'GET':
-                read_mod_cookie()
             if hasattr(c.user, 'msgtime') and c.user.msgtime:
                 c.have_messages = c.user.msgtime
             c.show_mod_mail = Subreddit.reverse_moderator_ids(c.user)
@@ -1009,6 +979,12 @@ class RedditController(MinimalController):
         if c.site == Random:
             c.site = Subreddit.random_reddit()
             redirect_to("/" + c.site.path.strip('/') + request.path)
+        elif c.site == RandomSubscription:
+            if c.user.gold:
+                c.site = Subreddit.random_subscription(c.user)
+                redirect_to('/' + c.site.path.strip('/') + request.path)
+            else:
+                redirect_to('/gold/about')
         elif c.site == RandomNSFW:
             c.site = Subreddit.random_reddit(over18=True)
             redirect_to("/" + c.site.path.strip('/') + request.path)
@@ -1061,7 +1037,37 @@ class RedditController(MinimalController):
         elif c.site.domain and c.site.css_on_cname and not c.cname:
             c.can_apply_styles = False
 
+        c.show_admin_bar = admin_bar_eligible and (c.user_is_admin or g.debug)
+        if not c.show_admin_bar:
+            g.stats.end_logging_timings()
+
         c.request_timer.intermediate("base-pre")
+
+    def post(self):
+        MinimalController.post(self)
+        self._embed_html_timing_data()
+
+    def _embed_html_timing_data(self):
+        timings = g.stats.end_logging_timings()
+
+        if not timings or not c.show_admin_bar or c.is_exception_response:
+            return
+
+        timings = [{
+            "key": timing.key,
+            "start": round(timing.start, 4),
+            "end": round(timing.end, 4),
+        } for timing in timings]
+
+        content = flatten_response(response.content)
+        # inject stats script tag at the end of the <body>
+        body_parts = list(content.rpartition("</body>"))
+        if body_parts[1]:
+            script = ('<script type="text/javascript">'
+                      'r.timings = %s'
+                      '</script>') % simplejson.dumps(timings)
+            body_parts.insert(1, script)
+            response.content = "".join(body_parts)
 
     def check_modified(self, thing, action):
         # this is a legacy shim until the old last_modified system is dead

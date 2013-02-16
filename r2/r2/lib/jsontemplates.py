@@ -185,6 +185,12 @@ class ThingJsonTemplate(JsonTemplate):
         elif attr == "child":
             return CachedVariable("childlisting")
 
+        if attr == 'distinguished':
+            distinguished = getattr(thing, attr, 'no')
+            if distinguished == 'no':
+                return None
+            return distinguished
+        
         if attr in ["num_reports", "banned_by", "approved_by"]:
             if c.user_is_loggedin and thing.subreddit.is_moderator(c.user):
                 if attr == "num_reports":
@@ -230,7 +236,7 @@ class SubredditJsonTemplate(ThingJsonTemplate):
         if (attr == "_ups" and g.lounge_reddit
             and thing.name == g.lounge_reddit):
             return 0
-        # Don't return accounts_active counts in /reddits
+        # Don't return accounts_active counts in /subreddits
         elif (attr == "accounts_active" and isinstance(c.site, SubSR)):
             return None
         elif attr == 'description_html':
@@ -306,6 +312,7 @@ class LinkJsonTemplate(ThingJsonTemplate):
                                                 media_embed  = "media_embed",
                                                 selftext     = "selftext",
                                                 selftext_html= "selftext_html",
+                                                distinguished= "distinguished",
                                                 num_comments = "num_comments",
                                                 num_reports  = "num_reports",
                                                 banned_by    = "banned_by",
@@ -364,6 +371,7 @@ class CommentJsonTemplate(ThingJsonTemplate):
                                                 replies      = "child",
                                                 body         = "body",
                                                 body_html    = "body_html",
+                                                distinguished= "distinguished",
                                                 likes        = "likes",
                                                 author       = "author", 
                                                 author_flair_text =
@@ -455,7 +463,8 @@ class MessageJsonTemplate(ThingJsonTemplate):
                                                 context      = "context", 
                                                 created      = "created",
                                                 parent_id    = "parent_id",
-                                                first_message= "first_message")
+                                                first_message= "first_message",
+                                                first_message_name = "first_message_name")
 
     def thing_attr(self, thing, attr):
         from r2.models import Message
@@ -480,6 +489,9 @@ class MessageJsonTemplate(ThingJsonTemplate):
         elif attr == "parent_id":
             if getattr(thing, "parent_id", None):
                 return make_fullname(Message, thing.parent_id)
+        elif attr == "first_message_name":
+            if getattr(thing, "first_message", None):
+                return make_fullname(Message, thing.first_message)
         return ThingJsonTemplate.thing_attr(self, thing, attr)
 
     def rendered_data(self, wrapped):
@@ -702,6 +714,7 @@ class SubredditSettingsTemplate(ThingJsonTemplate):
                         over_18 = 'site.over_18',
                         default_set = 'site.allow_top',
                         show_media = 'site.show_media',
+                        exclude_banned_modqueue = 'site.exclude_banned_modqueue',
                         domain = 'site.domain',
                         domain_css = 'site.css_on_cname',
                         wikimode = 'site.wikimode',

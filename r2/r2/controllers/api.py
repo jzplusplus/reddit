@@ -235,6 +235,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                    url = VUrl(['url', 'sr', 'resubmit']),
                    title = VTitle('title'),
                    save = VBoolean('save'),
+                   sendreplies = VBoolean('sendreplies'),
                    selftext = VSelfText('text'),
                    kind = VOneOf('kind', ['link', 'self']),
                    then = VOneOf('then', ('tb', 'comments'),
@@ -244,7 +245,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                   )
     @api_doc(api_section.links_and_comments)
     def POST_submit(self, form, jquery, url, selftext, kind, title,
-                    save, sr, ip, then, extension):
+                    save, sr, ip, then, extension, sendreplies):
         """Submit a link to a subreddit.
 
         Submit will create a link or self-post in the subreddit `sr` with the
@@ -373,9 +374,12 @@ class ApiController(RedditController, OAuth2ResourceController):
                 form.set_error(errors.QUOTA_FILLED, None)
                 return
 
+        if not c.user.gold or not hasattr(request.post, 'sendreplies'):
+            sendreplies = kind == 'self'
+
         # well, nothing left to do but submit it
         l = Link._submit(request.post.title, url if kind == 'link' else 'self',
-                         c.user, sr, ip, spam=c.user._spam)
+                         c.user, sr, ip, spam=c.user._spam, sendreplies=sendreplies)
 
         if banmsg:
             g.stats.simple_event('spam.domainban.link_url')
@@ -447,9 +451,22 @@ class ApiController(RedditController, OAuth2ResourceController):
             responder._send_data(modhash = user.modhash())
             responder._send_data(cookie  = user.make_cookie())
 
-    @validatedForm(user = VThrottledLogin(['user', 'passwd']),
+    @validatedForm(VLoggedOut(),
+                   user = VThrottledLogin(['user', 'passwd']),
                    rem = VBoolean('rem'))
     def _handle_login(self, form, responder, user, rem):
+        exempt_ua = (request.user_agent and
+                     any(ua in request.user_agent for ua
+                         in g.config.get('exempt_login_user_agents', ())))
+        if (errors.LOGGED_IN, None) in c.errors:
+            if user == c.user or exempt_ua:
+                # Allow funky clients to re-login as the current user.
+                c.errors.remove((errors.LOGGED_IN, None))
+            else:
+                from r2.lib.base import abort
+                from r2.lib.errors import reddit_http_error
+                abort(reddit_http_error(409, errors.LOGGED_IN))
+
         if not (responder.has_errors("vdelay", errors.RATELIMIT) or
                 responder.has_errors("passwd", errors.WRONG_PASSWORD)):
             self._login(responder, user, rem)
@@ -592,11 +609,18 @@ class ApiController(RedditController, OAuth2ResourceController):
 
         # The user who made the request must be an admin or a moderator
         # for the privilege change to succeed.
+        # (Exception: a user can remove privilege from oneself)
         victim = iuser or nuser
-        perm = 'wiki' if type.startswith('wiki') else 'access'
+        required_perms = []
+        if c.user != victim:
+            if type.startswith('wiki'):
+                required_perms.append('wiki')
+            else:
+                required_perms.append('access')
         if (not c.user_is_admin
             and (type in self._sr_friend_types
-                 and not container.is_moderator_with_perms(c.user, perm))):
+                 and not container.is_moderator_with_perms(
+                     c.user, *required_perms))):
             abort(403, 'forbidden')
         if (type == 'moderator' and not
             (c.user_is_admin or container.can_demod(c.user, victim))):
@@ -610,7 +634,7 @@ class ApiController(RedditController, OAuth2ResourceController):
         if type == 'contributor' and (container.name == g.central_sr or container.name == g.secret_central_sr):
                 print 'Removing from all subs and removing reddit gold' 
                 admintools.degolden(victim)
-                q = Subreddit._query()
+                q = Subreddit._query(sort=desc('_date'))
                 for sr in utils.fetch_things2(q):
                     containers.append(sr)
         else:
@@ -649,7 +673,8 @@ class ApiController(RedditController, OAuth2ResourceController):
 
         if type in ("moderator", "moderator_invite"):
             if not c.user_is_admin:
-                if type == "moderator" and not c.site.can_demod(c.user, target):
+                if type == "moderator" and (
+                    c.user == target or not c.site.can_demod(c.user, target)):
                     abort(403, 'forbidden')
                 if (type == "moderator_invite"
                     and not c.site.is_unlimited_moderator(c.user)):
@@ -716,7 +741,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                     container._incr('_ups', 1)
                 changed(container, True)
                 admintools.engolden(friend, 10000)
-                q = Subreddit._query()
+                q = Subreddit._query(sort=desc('_date'))
                 subSecrets = (container.name == g.secret_central_sr)
                 for sr in utils.fetch_things2(q):
                     #print sr.name + ': ' + str(sr.name not in g.secret_srs)
@@ -1682,6 +1707,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                    over_18 = VBoolean('over_18'),
                    allow_top = VBoolean('allow_top'),
                    show_media = VBoolean('show_media'),
+                   exclude_banned_modqueue = VBoolean('exclude_banned_modqueue'),
                    show_cname_sidebar = VBoolean('show_cname_sidebar'),
                    type = VOneOf('type', ('public', 'private', 'restricted', 'archived')),
                    link_type = VOneOf('link_type', ('any', 'link', 'self')),
@@ -1732,6 +1758,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                   if k in ('name', 'title', 'domain', 'description',
                            'show_media', 'show_cname_sidebar', 'type', 'link_type', 'lang',
                            'css_on_cname', 'header_title', 'over_18',
+                           'exclude_banned_modqueue',
                            'wikimode', 'wiki_edit_karma', 'wiki_edit_age',
                            'allow_top', 'public_description'))
 
@@ -2002,20 +2029,40 @@ class ApiController(RedditController, OAuth2ResourceController):
 
         log_modaction = True
         log_kw = {}
-        original = thing.distinguished if hasattr(thing, 'distinguished') else 'no'
-        if how == original:
-            log_modaction = False   # Distinguish unchanged
-        elif how in ('admin', 'special'):
-            log_modaction = False   # Add admin/special
-        elif original in ('admin', 'special') and how == 'no':
-            log_modaction = False  # Remove admin/special
-        elif how == 'no':
-            log_kw['details'] = 'remove'    # yes --> no
-        else:
-            pass    # no --> yes
+        send_message = False
+        original = getattr(thing, 'distinguished', 'no')
+        if how == original: # Distinguish unchanged
+            log_modaction = False
+        elif how in ('admin', 'special'): # Add admin/special
+            log_modaction = False
+            send_message = True
+        elif (original in ('admin', 'special') and
+                how == 'no'): # Remove admin/special
+            log_modaction = False
+        elif how == 'no': # From yes to no
+            log_kw['details'] = 'remove'
+        else: # From no to yes
+            send_message = True
+
+        # Send a message if this is a top-level comment on a submission that
+        # does not have sendreplies set, if it's the first distinguish for this
+        # comment, and if the user isn't banned or blocked by the author
+        if isinstance(thing, Comment):
+            link = Link._byID(thing.link_id, data=True)
+            to = Account._byID(link.author_id, data=True)
+            if (send_message and
+                    thing.parent_id is None and
+                    not link.sendreplies and
+                    not hasattr(thing, 'distinguished') and
+                    not c.user._spam and
+                    c.user._id not in to.enemies and
+                    to.name != c.user.name):
+                inbox_rel = Inbox._add(to, thing, 'selfreply')
+                queries.new_comment(thing, inbox_rel)
 
         thing.distinguished = how
         thing._commit()
+
         wrapper = default_thing_wrapper(expand_children = True)
         w = wrap_links(thing, wrapper)
         jquery(".content").replace_things(w, True, True)
@@ -3112,16 +3159,20 @@ class ApiController(RedditController, OAuth2ResourceController):
         Trophy.by_account(recipient, _update=True)
         Trophy.by_award(award, _update=True)
 
-    @validatedForm(links = VByName('links', thing_cls = Link, multiple = True),
-                   show = VByName('show', thing_cls = Link, multiple = False))
-    def POST_fetch_links(self, form, jquery, links, show):
-        l = wrap_links(links, listing_cls = SpotlightListing,
-                       num_margin = 0, mid_margin = 0)
-        jquery(".content").replace_things(l, stubs = True)
 
-        if show:
-            jquery('.organic-listing .link:visible').hide()
-            jquery('.organic-listing .id-%s' % show._fullname).show()
+    @validate(link=nop('link'),
+              campaign=nop('campaign'))
+    def GET_fetch_promo(self, link, campaign):
+        promo_tuples = [promote.PromoTuple(link, 1., campaign)]
+        builder = CampaignBuilder(promo_tuples,
+                                  wrap=default_thing_wrapper(),
+                                  keep_fn=promote.is_promoted)
+        promoted_links = builder.get_items()[0]
+        if promoted_links:
+            s = SpotlightListing(promoted_links=promoted_links).listing()
+            item = s.things[0]
+            return spaceCompress(item.render())
+
 
     @noresponse(VUser(),
               ui_elem = VOneOf('id', ('organic',)))

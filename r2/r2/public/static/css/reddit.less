@@ -306,7 +306,7 @@ ul.flat-vert {text-align: left;}
 
 .dropdown.lightdrop .selected {
     position: relative;
-    background: transparent none no-repeat scroll center right;
+    background: none no-repeat scroll center right;
     background-image: url(../droparrowgray.gif);
     padding-right: 21px;
     text-decoration: underline;
@@ -820,7 +820,7 @@ a.author { margin-right: 0.5em; }
 
 .media-button .option { color: red; }
 .media-button .option.active {
-    background: transparent none no-repeat scroll right center;
+    background: none no-repeat scroll right center;
     background-image: url(../reddit-button-play.png);   /* SPRITE */
     padding-right: 15px;
     color: #336699;
@@ -1155,7 +1155,7 @@ a.author { margin-right: 0.5em; }
 
 .infobar.mellow {
     background-color: #eff8ff;
-    border: 1px solid #bfe0ff;
+    border: 1px solid #93abc2;
 }
 
 .infobar.gold {
@@ -1170,6 +1170,7 @@ a.author { margin-right: 0.5em; }
 }
 
 .infobar.welcome {
+    display: none;
     background: url(../welcome-lines.png) top center;
     border: 1px solid #ff8b60;
     padding: 0;
@@ -1301,7 +1302,7 @@ a.star { text-decoration: none; color: #ff8b60 }
 .toggle .option.active { display: inline; }
 
 .thing .stub { display: none; }
-.link.last-clicked { border: 1px dashed gray; }
+.link.last-clicked { border: 1px dashed gray; overflow: hidden; }
 
 .link { margin: 0; margin-bottom: 8px; padding-left: 3px; }
 .link .score {text-align: center; color: #c6c6c6;}
@@ -3380,7 +3381,7 @@ ul#image-preview-list .description pre {
 }
 
 .dropdown.srdrop .selected {
-    background: transparent none no-repeat scroll center right;
+    background: none no-repeat scroll center right;
     background-image: url(../droparrowgray.gif); 
     display: inline-block;
     vertical-align: bottom;
@@ -3408,6 +3409,7 @@ ul#image-preview-list .description pre {
 
 .sr-bar .separator {color: gray; }
 .sr-bar a {color: black;} 
+.sr-bar a.gold { color: #9a7d2e; font-weight: bold; }
 
 #sr-more-link {
     color: black;
@@ -3890,7 +3892,7 @@ ul.tabmenu.formtab {
 }
 
 .existing-campaigns td.bid { 
-    background: transparent none no-repeat scroll center right;
+    background: none no-repeat scroll center right;
     padding-right: 15px;
 }
 
@@ -4476,7 +4478,7 @@ table.lined-table {
 .ui-datepicker-inline .ui-datepicker-calendar td.ui-datepicker-today span,
 .ui-datepicker-inline .ui-datepicker-calendar td a.ui-state-active
  {
-    color:  white;;
+    color: white;
     background: -webkit-gradient(linear, 0% 0%, 0% 100%, from( hsl(210, 54%, 65%)), to( hsl(210, 54%, 45%)));
     background: -moz-linear-gradient(top, hsl(210, 54%, 65%), hsl(210, 54%, 45%));
     background-color: #4F8AC9;
@@ -5332,6 +5334,10 @@ body:not(.gold) .allminus-link {
     max-width: 550px;
 }
 
+.gold-accent.roundfield {
+    margin-top: 0px;
+}
+
 .gold-form {
     font-family: "Hoefler Text","Palatino Linotype","Book Antiqua", Palatino,georgia,garamond,FreeSerif,serif;
     min-height: 600px;
@@ -5429,7 +5435,7 @@ body:not(.gold) .allminus-link {
     text-shadow: 0px 1px 0px hsla(0,0%,100%,.7);
 }
 
-.gold-button.disabled {
+.gold-button.disabled, .gold-button:disabled  {
     color: #999;
     background-color: #ccc;
     border-color: #aaa;
@@ -6420,7 +6426,7 @@ body.gold .buttons li.comment-save-button { display: inline; }
     display: inline-block;
     font-size: small;
     text-align: right;
-    width: 44ex;
+    width: 36ex;
 }
 #moderator_invite .permissions { width: 30ex; }
 .permissions > form { display: none; }

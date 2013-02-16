@@ -67,7 +67,7 @@ class Link(Thing, Printable):
                      pending=False,
                      disable_comments=False,
                      selftext='',
-                     noselfreply=False,
+                     sendreplies=True,
                      ip='0.0.0.0',
                      flair_text=None,
                      flair_css_class=None,
@@ -142,7 +142,7 @@ class Link(Thing, Printable):
             return cls._defaults['comment_tree_version']
 
     @classmethod
-    def _submit(cls, title, url, author, sr, ip, spam=False):
+    def _submit(cls, title, url, author, sr, ip, spam=False, sendreplies=True):
         from r2.models import admintools
 
         l = cls(_ups=1,
@@ -150,6 +150,7 @@ class Link(Thing, Printable):
                 url=url,
                 _spam=spam,
                 author_id=author._id,
+                sendreplies=sendreplies,
                 sr_id=sr._id,
                 lang=sr.lang,
                 ip=ip,
@@ -414,6 +415,10 @@ class Link(Thing, Printable):
                     item.thumbnail = ""
             elif not show_media:
                 item.thumbnail = ""
+            elif (item._deleted or
+                  item._spam and item._date < timeago("6 hours")):
+                item.thumbnail = "default"
+                item.thumbnail_sprited = True
             elif item.has_thumbnail:
                 item.thumbnail = media.thumbnail_url(item)
             elif item.is_self:
@@ -595,11 +600,17 @@ class Link(Thing, Printable):
 
     @property
     def subreddit_slow(self):
-        from subreddit import Subreddit
-        """return's a link's subreddit. in most case the subreddit is already
-        on the wrapped link (as .subreddit), and that should be used
-        when possible. """
-        return Subreddit._byID(self.sr_id, True, return_dict=False)
+        """Returns the link's subreddit."""
+        # The subreddit is often already on the wrapped link as .subreddit
+        # If available, that should be used instead of calling this
+        return Subreddit._byID(self.sr_id, data=True, return_dict=False)
+
+    @property
+    def author_slow(self):
+        """Returns the link's author."""
+        # The author is often already on the wrapped link as .author
+        # If available, that should be used instead of calling this
+        return Account._byID(self.author_id, data=True, return_dict=False)
 
 class LinksByUrl(tdb_cassandra.View):
     _use_db = True
@@ -738,7 +749,7 @@ class Comment(Thing, Printable):
         name = 'inbox'
         if parent:
             to = Account._byID(parent.author_id, True)
-        elif link.is_self and not link.noselfreply:
+        elif link.sendreplies:
             to = Account._byID(link.author_id, True)
             name = 'selfreply'
 
@@ -781,6 +792,13 @@ class Comment(Thing, Printable):
             l = Link._byID(self.link_id, True)
             sr_id = l.sr_id
         return Subreddit._byID(sr_id, True, return_dict=False)
+
+    @property
+    def author_slow(self):
+        """Returns the comment's author."""
+        # The author is often already on the wrapped comment as .author
+        # If available, that should be used instead of calling this
+        return Account._byID(self.author_id, data=True, return_dict=False)
 
     def keep_item(self, wrapped):
         return True
