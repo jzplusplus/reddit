@@ -600,15 +600,14 @@ class ApiController(RedditController, OAuth2ResourceController):
             abort(403, 'forbidden')
         
         containers = []
-        if type == 'contributor':
-            if container.name == g.central_sr or container.name == g.secret_central_sr:
+        if type == 'contributor' and (container.name == g.central_sr or container.name == g.secret_central_sr):
                 print 'Removing from all subs and removing reddit gold' 
                 admintools.degolden(victim)
                 q = Subreddit._query()
                 for sr in utils.fetch_things2(q):
                     containers.append(sr)
-            else:
-                containers = [container]
+        else:
+            containers = [container]
  
         for cont in containers:
 	    fn = getattr(cont, 'remove_' + type)
@@ -663,8 +662,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                 abort(403, 'forbidden')
 
         containers = []
-        if type == 'contributor':
-            if container.name == g.central_sr or container.name == g.secret_central_sr:
+        if type == 'contributor' and (container.name == g.central_sr or container.name == g.secret_central_sr):
                 print 'Adding to all subs and giving gold'
                 Subreddit.subscribe_defaults(friend)
                 if container.add_subscriber(friend):
@@ -677,8 +675,8 @@ class ApiController(RedditController, OAuth2ResourceController):
                     #print sr.name + ': ' + str(sr.name not in g.secret_srs)
                     if subSecrets or sr.name not in g.secret_srs:
                         containers.append(sr)
-            else:
-                containers = [container]
+        else:
+            containers = [container]
  
         for cont in containers:
 	    fn = getattr(cont, 'add_' + type)
