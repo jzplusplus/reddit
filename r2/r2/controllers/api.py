@@ -631,7 +631,7 @@ class ApiController(RedditController, OAuth2ResourceController):
             abort(403, 'forbidden')
         
         containers = []
-        if type == 'contributor' and (container.name == g.central_sr or container.name == g.secret_central_sr):
+        if type == 'contributor' and (container.name == g.central_sr or container.name == g.secret_central_sr) and (not g.secret_user == victim.name):
                 print 'Removing from all subs and removing reddit gold' 
                 admintools.degolden(victim)
                 q = Subreddit._query(sort=desc('_date'))
@@ -1851,7 +1851,7 @@ class ApiController(RedditController, OAuth2ResourceController):
                 secret_sr = Subreddit._by_name(g.secret_central_sr)
                 secret = (name in g.secret_srs)
                 for user in admintools.all_gold_users():
-                    if not secret or secret_sr.is_contributor(user):
+                    if (not secret or secret_sr.is_contributor(user)) and (not g.secret_user == user.name):
                         sr.add_contributor(user)
 
                 redir = sr.path + "about/edit/?created=true"
